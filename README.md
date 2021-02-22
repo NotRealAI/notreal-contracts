@@ -28,6 +28,7 @@ AMPLIFY ART.
 # Authors
 
 Created and maintained by [NotReal](https://notreal.ai)
+
 Based on <a href="https://github.com/knownorigin/known-origin-contracts">KnownOrigin by BlockRocket</a>. Thank you <3
 
 # Features

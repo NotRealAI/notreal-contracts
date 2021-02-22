@@ -6,6 +6,10 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "../ReentrancyGuard.sol";
 import "../../forwarder/NativeMetaTransaction.sol";
 
+// ERC20
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+
 //import "hardhat/console.sol";
 
 interface INRDAV2Methods {
@@ -44,6 +48,7 @@ NativeMetaTransaction("TokenMarketplaceV2")
 
 
   using SafeMath for uint256;
+  using SafeERC20 for IERC20;
 
   event UpdatePlatformPercentageFee(uint256 _oldPercentage, uint256 _newPercentage);
   event UpdateRoyaltyPercentageFee(uint256 _oldPercentage, uint256 _newPercentage);
@@ -130,6 +135,9 @@ NativeMetaTransaction("TokenMarketplaceV2")
   // NR account which can receive commission
   address public nrCommissionAccount;
 
+  // Accepted ERC20 token
+  IERC20 public acceptedToken;
+
   // These are in 1/1000ths
   uint256 public artistRoyaltyPercentage = 100;
   uint256 public platformFeePercentage = 25;
@@ -165,8 +173,8 @@ NativeMetaTransaction("TokenMarketplaceV2")
     _;
   }
 
-  modifier onlyWhenBidOverMinAmount(uint256 _tokenId) {
-    require(msg.value >= offers[_tokenId].offer.add(minBidAmount), "Offer not enough");
+  modifier onlyWhenBidOverMinAmount(uint256 _tokenId, uint256 _msgValue) {
+    require(_msgValue >= offers[_tokenId].offer.add(minBidAmount), "Offer not enough");
     _;
   }
 
@@ -189,9 +197,10 @@ NativeMetaTransaction("TokenMarketplaceV2")
   /////////////////
 
   // Set the caller as the default NR account
-  constructor(INRDAV2Methods _nrdaAddress, address _nrCommissionAccount) public {
+  constructor(INRDAV2Methods _nrdaAddress, address _nrCommissionAccount, IERC20 _acceptedToken) public {
     nrdaAddress = _nrdaAddress;
     nrCommissionAccount = _nrCommissionAccount;
+    acceptedToken = _acceptedToken;
     _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
     super.addAddressToWhitelist(_msgSender());
   }
@@ -200,26 +209,25 @@ NativeMetaTransaction("TokenMarketplaceV2")
   // User Bidding Actions //
   //////////////////////////
 
-  function placeBid(uint256 _tokenId)
+  function placeBid(uint256 _tokenId, uint256 _msgValue)
   public
-  payable
   whenNotPaused
   nonReentrant
   onlyWhenTokenExists(_tokenId)
-  onlyWhenBidOverMinAmount(_tokenId)
+  onlyWhenBidOverMinAmount(_tokenId, _msgValue)
   onlyWhenTokenAuctionEnabled(_tokenId)
   onlyDuringMintWindow(_tokenId)
   {
 
-    // Not sure whether to disable this... if contracts want to bid, why not let them?
-    require(!isContract(_msgSender()), "Unable to place a bid as a contract");
+    // require(!isContract(_msgSender()), "Unable to place a bid as a contract");
+    acceptedToken.safeTransferFrom(_msgSender(), address(this), _msgValue);
     _refundHighestBidder(_tokenId);
 
-    offers[_tokenId] = Offer({bidder : _msgSender(), offer : msg.value});
+    offers[_tokenId] = Offer({bidder : _msgSender(), offer : _msgValue});
 
     address currentOwner = nrdaAddress.ownerOf(_tokenId);
 
-    emit BidPlaced(_tokenId, currentOwner, _msgSender(), msg.value);
+    emit BidPlaced(_tokenId, currentOwner, _msgSender(), _msgValue);
   }
 
   //// Allowing withdraw could create an exploit
@@ -306,7 +314,8 @@ NativeMetaTransaction("TokenMarketplaceV2")
         delete offers[_tokenId];
 
         // Refund it
-        payable(currentHighestBidder).transfer(currentHighestBiddersAmount);
+        acceptedToken.safeTransfer(currentHighestBidder, currentHighestBiddersAmount);
+        //payable(currentHighestBidder).transfer(currentHighestBiddersAmount);
       }
     }
   }
@@ -349,9 +358,8 @@ NativeMetaTransaction("TokenMarketplaceV2")
     _delistToken(_tokenId);
   }
 
-  function buyToken(uint256 _tokenId)
+  function buyToken(uint256 _tokenId, uint256 _msgValue)
   public
-  payable
   nonReentrant
   whenNotPaused {
     Listing storage listing = listings[_tokenId];
@@ -365,7 +373,8 @@ NativeMetaTransaction("TokenMarketplaceV2")
 
     // check listing satisfied
     uint256 listingPrice = listing.price;
-    require(msg.value == listingPrice, "List price not satisfied");
+    require(_msgValue == listingPrice, "List price not satisfied");
+    acceptedToken.safeTransferFrom(_msgSender(), address(this), _msgValue);
 
     // Get edition no.
     uint256 editionNumber = nrdaAddress.editionOfTokenId(_tokenId);
@@ -431,22 +440,26 @@ NativeMetaTransaction("TokenMarketplaceV2")
     uint256 totalToSendToOwner = _offer.sub(
       _offer.div(1000).mul(totalCommissionPercentageToPay)
     );
-    payable(_currentOwner).transfer(totalToSendToOwner);
+    acceptedToken.safeTransfer(_currentOwner, totalToSendToOwner);
+    //payable(_currentOwner).transfer(totalToSendToOwner);
 
     // Send % to NR
     uint256 nrCommission = _offer.div(1000).mul(platformFeePercentage);
-    payable(nrCommissionAccount).transfer(nrCommission);
+    acceptedToken.safeTransfer(nrCommissionAccount, nrCommission);
+    //payable(nrCommissionAccount).transfer(nrCommission);
 
     // Send % to NR
     uint256 minterRoyalty = _offer.div(1000).mul(minterRoyaltyPercentage);
-    payable(_minterAccount).transfer(minterRoyalty);
+    acceptedToken.safeTransfer(_minterAccount, minterRoyalty);
+    //payable(_minterAccount).transfer(minterRoyalty);
 
     // Send to seller minus royalties and commission
     uint256 remainingRoyalties = _offer.sub(nrCommission).sub(minterRoyalty).sub(totalToSendToOwner);
 
     if (_optionalCommissionRecipient == address(0)) {
       // After NR and Seller - send the rest to the original artist
-      payable(_artistAccount).transfer(remainingRoyalties);
+      acceptedToken.safeTransfer(_artistAccount, remainingRoyalties);
+      //payable(_artistAccount).transfer(remainingRoyalties);
     } else {
       _handleOptionalSplits(_artistAccount, _artistCommissionRate, _optionalCommissionRecipient, _optionalCommissionRate, remainingRoyalties);
     }
@@ -466,10 +479,12 @@ NativeMetaTransaction("TokenMarketplaceV2")
     uint256 primaryArtistPercentage = _scaledUpCommission.div(_totalCollaboratorsRate);
 
     uint256 totalPrimaryRoyaltiesToArtist = _remainingRoyalties.mul(primaryArtistPercentage).div(10 ** 18);
-    payable(_artistAccount).transfer(totalPrimaryRoyaltiesToArtist);
+    acceptedToken.safeTransfer(_artistAccount, totalPrimaryRoyaltiesToArtist);
+    //payable(_artistAccount).transfer(totalPrimaryRoyaltiesToArtist);
 
     uint256 remainingRoyaltiesToCollaborator = _remainingRoyalties.sub(totalPrimaryRoyaltiesToArtist);
-    payable(_optionalCommissionRecipient).transfer(remainingRoyaltiesToCollaborator);
+    acceptedToken.safeTransfer(_optionalCommissionRecipient, remainingRoyaltiesToCollaborator);
+    //payable(_optionalCommissionRecipient).transfer(remainingRoyaltiesToCollaborator);
   }
 
   ///////////////////

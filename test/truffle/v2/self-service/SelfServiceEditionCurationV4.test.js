@@ -13,6 +13,7 @@ const NotRealDigitalAssetV2 = artifacts.require('NotRealDigitalAssetV2');
 const SelfServiceEditionCurationV4 = artifacts.require('SelfServiceEditionCurationV4');
 const SelfServiceAccessControls = artifacts.require('SelfServiceAccessControls');
 const SelfServiceFrequencyControls = artifacts.require('SelfServiceFrequencyControls');
+const ERC20Mock = artifacts.require('ERC20Mock');
 
 const ArtistAcceptingBidsV2 = artifacts.require('ArtistAcceptingBidsV2');
 
@@ -54,11 +55,17 @@ contract('SelfServiceEditionCurationV4 tests', function (accounts) {
   };
 
   beforeEach(async () => {
+    this.erc20 = await ERC20Mock.new('Token', 'MTKN', _owner, 0, {from:_owner});
+    const accts = [_owner, nrCommission, optionalSplitAddress];
+
+    await Promise.all(accts.map(async acct => {
+      await this.erc20.mint(acct, etherToWei(9999), { from: _owner })
+    }))
     // Create NRDA
-    this.nrda = await NotRealDigitalAssetV2.new({from: _owner});
+    this.nrda = await NotRealDigitalAssetV2.new(this.erc20.address, {from: _owner});
     addEditionCreators(this.nrda);
     // Create Auction
-    this.auction = await ArtistAcceptingBidsV2.new(this.nrda.address, {from: _owner});
+    this.auction = await ArtistAcceptingBidsV2.new(this.nrda.address, this.erc20.address, {from: _owner});
 
     // Create Self Service Access controls
     this.accessControls = await SelfServiceAccessControls.new({from: _owner});

@@ -13,6 +13,7 @@ const {inTransaction} = require('../../helpers/expectEvent');
 
 const NotRealDigitalAssetV2 = artifacts.require('NotRealDigitalAssetV2');
 const ERC721Receiver = artifacts.require('ERC721ReceiverMockV2.sol');
+const ERC20Mock = artifacts.require('ERC20Mock');
 
 require('chai')
   .use(require('chai-as-promised'))
@@ -54,7 +55,15 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
   });
 
   beforeEach(async () => {
-    this.token = await NotRealDigitalAssetV2.new({from: _owner});
+    const accts = [_owner, account1,account2,account3, artistAccount];
+
+    this.erc20 = await ERC20Mock.new('Token', 'MTKN', _owner, 0, {from:_owner});
+
+    await Promise.all(accts.map(async acct => {
+      await this.erc20.mint(acct, etherToWei(9999), { from: _owner })
+    }))
+
+    this.token = await NotRealDigitalAssetV2.new(this.erc20.address, {from: _owner});
     addEditionCreators(this.token);
   });
 
@@ -68,15 +77,17 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
     const secondTokenId = 200001;
 
     beforeEach(async () => {
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price}); // tokenId 100001
-      await this.token.purchase(editionNumber2, {from: account1, value: edition2Price}); // tokenId 200001
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account1}); // tokenId 100001
+      await this.token.purchase(editionNumber2,  edition2Price, {from: account1}); // tokenId 200001
     });
 
     describe('mint', () => {
       const thirdTokenId = 100002;
 
       beforeEach(async () => {
-        await this.token.purchaseTo(account2, editionNumber1, {from: account2, value: edition1Price});
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account2})
+        await this.token.purchaseTo(account2, editionNumber1,  edition1Price, {from: account2});
       });
 
       it(`adjusts owner tokens by index - [${firstTokenId}]`, async () => {
@@ -238,8 +249,8 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
 
           await this.token.burn(tokenId, {from: _owner});
 
-          await this.token.purchase(edition, {from, value});
-          await this.token.purchase(edition, {from, value});
+          await this.token.purchase(edition, value, {from});
+          await this.token.purchase(edition, value, {from});
 
           const count = await this.token.totalSupply();
           count.toNumber().should.be.equal(3);
@@ -278,8 +289,9 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
     const creator = account1;
 
     beforeEach(async () => {
-      await this.token.purchaseTo(creator, editionNumber1, {from: creator, value: edition1Price});
-      await this.token.purchaseTo(creator, editionNumber2, {from: creator, value: edition2Price});
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: creator})
+      await this.token.purchaseTo(creator, editionNumber1,  edition1Price, {from: creator});
+      await this.token.purchaseTo(creator, editionNumber2,  edition2Price, {from: creator});
     });
 
     describe('mint', () => {
@@ -288,7 +300,8 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
 
       describe('when successful', () => {
         beforeEach(async () => {
-          const result = await this.token.purchaseTo(to, editionNumber1, {value: edition1Price});
+          await this.erc20.approve(this.token.address, etherToWei(9999), {from: _owner})
+          const result = await this.token.purchaseTo(to, editionNumber1, edition1Price);
           logs = result.logs;
         });
 
@@ -313,13 +326,13 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
 
       describe('when the given owner address is the zero address', () => {
         it('reverts', async () => {
-          await assertRevert(this.token.purchaseTo(ZERO_ADDRESS, editionNumber1, {value: edition1Price}));
+          await assertRevert(this.token.purchaseTo(ZERO_ADDRESS, editionNumber1, edition1Price));
         });
       });
 
       describe('when the given token ID was NOT tracked by this contract', () => {
         it('reverts', async () => {
-          await assertRevert(this.token.purchaseTo(account1, unknownEdition, {value: edition1Price}));
+          await assertRevert(this.token.purchaseTo(account1, unknownEdition, edition1Price));
         });
       });
     });
@@ -379,8 +392,9 @@ contract('NotRealDigitalAssetV2 - ERC721Token', function (accounts) {
     const RECEIVER_MAGIC_VALUE = '0x150b7a02';
 
     beforeEach(async () => {
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price}); // tokenId 100001
-      await this.token.purchase(editionNumber2, {from: account1, value: edition2Price}); // tokenId 200001
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account1}); // tokenId 100001
+      await this.token.purchase(editionNumber2,  edition2Price, {from: account1}); // tokenId 200001
     });
 
     describe('balanceOf', () => {

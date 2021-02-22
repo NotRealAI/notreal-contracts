@@ -1,12 +1,14 @@
 const assertRevert = require('../../helpers/assertRevert');
 const etherToWei = require('../../helpers/etherToWei');
+const weiToEther = require('../../helpers/weiToEther');
 const {duration, increaseTo, advanceBlock, latest} = require('../../helpers/time');
 const bnChai = require('bn-chai');
 
 const _ = require('lodash');
 
 const getGasCosts = require('../../helpers/getGasCosts');
-const getBalance = require('../../helpers/getBalance');
+const getTokenBalance = require('../../helpers/getTokenBalance');
+let getBalance;
 const bytesToString = require('../../helpers/bytesToString');
 const toBN = require('../../helpers/toBN');
 
@@ -58,16 +60,16 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
 
   beforeEach(async () => {
     this.erc20 = await ERC20Mock.new('Token', 'MTKN', _owner, 0, {from:_owner});
+    getBalance = getTokenBalance(this.erc20);
 
-    await Promise.all(accounts.map(async acct => {
+    const accts = [_owner, account1,account2,account3,account4];
+
+    await Promise.all(accts.map(async acct => {
       await this.erc20.mint(acct, etherToWei(9999), { from: _owner })
+      //await erc20.approve(this.token.address, etherToWei(9999), {from: acct})
     }))
 
-
-
     this.token = await NotRealDigitalAssetV2.new(this.erc20.address, {from: _owner});
-
-    await erc20.approve(this.token.address, etherToWei(1e9), {from: account1})
 
     this.token.createActiveEdition = async (...args) => {
       args.splice(-1, 0, true);
@@ -309,7 +311,8 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
         });
       });
 
-      describe.only('updateTotalAvailable', () => {
+      describe('updateTotalAvailable', () => {
+
         it('can be updated by whitelist', async () => {
           await this.token.updateTotalAvailable(editionNumber1, 100);
           let available = await this.token.totalAvailableEdition(editionNumber1);
@@ -321,6 +324,8 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
         });
 
         it('reverts if updating available to below the minted amount', async () => {
+
+          await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
           // Sell one
           await this.token.purchase(editionNumber1, edition1Price, {from: account1});
 
@@ -721,10 +726,14 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
     });
 
     beforeEach(async () => {
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price}); // tokenId 100001
-      await this.token.purchase(editionNumber2, {from: account2, value: edition2Price}); // tokenId 200001
-      await this.token.purchase(editionNumber1, {from: account2, value: edition1Price}); // tokenId 100002
-      await this.token.purchase(editionNumber2, {from: account3, value: edition2Price}); // tokenId 200002
+      await Promise.all(accounts.map(async acct => {
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: acct})
+      }))
+
+      await this.token.purchase(editionNumber1, edition1Price, {from: account1}); // tokenId 100001
+      await this.token.purchase(editionNumber2, edition2Price, {from: account2}); // tokenId 200001
+      await this.token.purchase(editionNumber1, edition1Price, {from: account2}); // tokenId 100002
+      await this.token.purchase(editionNumber2, edition2Price, {from: account3}); // tokenId 200002
     });
 
     describe('setTokenURI', async () => {
@@ -858,36 +867,42 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
   describe('mint', async () => {
 
     beforeEach(async () => {
+      this.approveGas = {}
+      await Promise.all([account1, account2].map(async acct => {
+        const approveTx = await this.erc20.approve(this.token.address, etherToWei(9999), {from: acct})
+        this.approveGas[acct] = await getGasCosts(approveTx);
+      }))
+
       await this.token.createActiveEdition(editionNumber1, editionData1, editionType, 0, 0, artistAccount, artistShare, edition1Price, editionTokenUri1, 3, {from: _owner});
       await this.token.createActiveEdition(editionNumber2, editionData2, editionType, 0, 0, artistAccount, artistShare, edition2Price, editionTokenUri2, 4, {from: _owner});
     });
 
     describe('validation', async () => {
       it('reverts if edition sold out', async () => {
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
 
         // Reverts on 4 mint as sold out
-        await assertRevert(this.token.purchase(editionNumber1, {from: account1, value: edition1Price}));
+        await assertRevert(this.token.purchase(editionNumber1,  edition1Price, {from: account1}));
       });
 
       it('reverts if edition not active', async () => {
         await this.token.updateActive(editionNumber1, false, {from: _owner});
 
         // reverts as inactive
-        await assertRevert(this.token.purchase(editionNumber1, {from: account1, value: edition1Price}));
+        await assertRevert(this.token.purchase(editionNumber1,  edition1Price, {from: account1}));
       });
 
       it('reverts if edition invalid', async () => {
         await this.token.updateTotalAvailable(editionNumber1, 0, {from: _owner});
 
         // reverts as edition sat to zero available
-        await assertRevert(this.token.purchase(editionNumber1, {from: account1, value: edition1Price}));
+        await assertRevert(this.token.purchase(editionNumber1,  edition1Price, {from: account1}));
       });
 
       it('reverts if purchase price not provided', async () => {
-        await assertRevert(this.token.purchase(editionNumber1, {from: account1, value: 0}));
+        await assertRevert(this.token.purchase(editionNumber1,  0, {from: account1}));
       });
     });
 
@@ -901,15 +916,19 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       const tokenId2_3 = 200003;
 
       beforeEach(async () => {
+        await Promise.all(accounts.map(async acct => {
+          await this.erc20.approve(this.token.address, etherToWei(9999), {from: acct})
+        }))
+
         // 3 from edition 2
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        await this.token.purchase(editionNumber1, {from: account2, value: edition1Price});
-        await this.token.purchase(editionNumber1, {from: account3, value: edition1Price});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account2});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account3});
 
         // 3 from edition 1
-        await this.token.purchase(editionNumber2, {from: account1, value: edition2Price});
-        await this.token.purchase(editionNumber2, {from: account2, value: edition2Price});
-        await this.token.purchase(editionNumber2, {from: account3, value: edition2Price});
+        await this.token.purchase(editionNumber2,  edition2Price, {from: account1});
+        await this.token.purchase(editionNumber2,  edition2Price, {from: account2});
+        await this.token.purchase(editionNumber2,  edition2Price, {from: account3});
       });
 
       it('sets token Uri', async () => {
@@ -999,28 +1018,39 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       beforeEach(async () => {
         // pre balances
         originalAccount1Balance = await getBalance(account1);
+        //console.log('originalAccount1Balance', weiToEther(originalAccount1Balance));
         originalAccount2Balance = await getBalance(account2);
         originalNrAccountBalance = await getBalance(await this.token.nrCommissionAccount());
         originalArtistAccountBalance = await getBalance(artistAccount);
 
+        // NOTE: Gas fees are now ignored (set to 0) in balance calculations because
+        // we are dealing with ERC20 token balances instead of native Ether balance
+
         // account 1 purchases edition 1
-        receiptAccount1 = await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        account1GasFees = await getGasCosts(receiptAccount1);
+        receiptAccount1 = await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        account1GasFees = toBN(0);
+        //account1GasFees = await getGasCosts(receiptAccount1);
+        //account1GasFees = account1GasFees.add(this.approveGas[account1]);
 
         // account 2 purchases another from edition 1
-        receiptAccount2 = await this.token.purchase(editionNumber1, {from: account2, value: edition1Price});
-        account2GasFees = await getGasCosts(receiptAccount2);
+        receiptAccount2 = await this.token.purchase(editionNumber1,  edition1Price, {from: account2});
+        account2GasFees = toBN(0);
+        //account2GasFees = await getGasCosts(receiptAccount2);
+        //account2GasFees = account2GasFees.add(this.approveGas[account2]);
 
         // post balances
         postAccount1Balance = await getBalance(account1);
         postAccount2Balance = await getBalance(account2);
         postNrAccountBalance = await getBalance(await this.token.nrCommissionAccount());
         postArtistAccountBalance = await getBalance(artistAccount);
+
+        //console.log('edition1Price', weiToEther(edition1Price));
+        //console.log('postAccount1Balance', weiToEther(postAccount1Balance));
       });
 
       it('splits funds between artist and KO account', async () => {
-        console.log(`GasUsed Account 1: ${account1GasFees}`);
-        console.log(`GasUsed Account 2: ${account2GasFees}`);
+        //console.log(`GasUsed Account 1: ${weiToEther(account1GasFees)}`);
+        //console.log(`GasUsed Account 2: ${weiToEther(account2GasFees)}`);
 
         // account 1 should be equal the cost of transaction, minus the edition cost
         postAccount1Balance.should.be.eq.BN(
@@ -1104,8 +1134,8 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       const tokenIdInvalid = 999;
 
       beforeEach(async () => {
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        await this.token.purchase(editionNumber2, {from: account2, value: edition2Price});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        await this.token.purchase(editionNumber2,  edition2Price, {from: account2});
       });
 
       it('should revert is token ID not valid', async () => {
@@ -1139,8 +1169,8 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       const tokenIdInvalid = 999;
 
       beforeEach(async () => {
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        await this.token.purchase(editionNumber2, {from: account2, value: edition2Price});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        await this.token.purchase(editionNumber2,  edition2Price, {from: account2});
       });
 
       it('should revert is token ID not valid', async () => {
@@ -1188,14 +1218,15 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       });
 
       it('reverts if edition auction not started', async () => {
-        await assertRevert(this.token.purchase(editionNumber1, {from: account1, value: edition1Price}));
+        await assertRevert(this.token.purchase(editionNumber1,  edition1Price, {from: account1}));
       });
 
       it('once updated the purchase will succeed', async () => {
         startDate = (await latest()) - duration.seconds(30); // lower start time to in the past
         await this.token.updateStartDate(editionNumber1, startDate, {from: _owner});
 
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
 
         let tokens = await this.token.tokensOf(account1);
         tokens
@@ -1216,14 +1247,15 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       });
 
       it('reverts if edition auction closed', async () => {
-        await assertRevert(this.token.purchase(editionNumber1, {from: account1, value: edition1Price}));
+        await assertRevert(this.token.purchase(editionNumber1,  edition1Price, {from: account1}));
       });
 
       it('once updated the purchase will succeed', async () => {
         endDate = (await latest()) + duration.minutes(2); // increase start time to in the future
         await this.token.updateEndDate(editionNumber1, endDate, {from: _owner});
 
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
 
         let tokens = await this.token.tokensOf(account1);
         tokens
@@ -1269,8 +1301,10 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
         originalArtistAccountBalance = await getBalance(artistAccount);
 
         // account 1 purchases edition 1
-        receiptAccount1 = await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-        account1GasFees = await getGasCosts(receiptAccount1);
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
+        receiptAccount1 = await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+        account1GasFees = toBN(0);
+        //account1GasFees = await getGasCosts(receiptAccount1);
 
         // post balances
         postAccount1Balance = await getBalance(account1);
@@ -1280,7 +1314,7 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       });
 
       it('splits funds between artist, optional & KO account', async () => {
-        console.log(`GasUsed Account 1: ${account1GasFees}`);
+        //console.log(`GasUsed Account 1: ${account1GasFees}`);
 
         // account 1 should be equal the cost of transaction, minus the edition cost
         postAccount1Balance.should.be.eq.BN(
@@ -1340,12 +1374,15 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
         originalNrAccountBalance = await getBalance(await this.token.nrCommissionAccount());
         originalArtistAccountBalance = await getBalance(artistAccount);
 
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
         // account 1 purchases edition 1
-        receiptAccount1 = await this.token.purchase(editionNumber1, {
-          from: account1,
-          value: edition1Price.add(overspend) // add the overspend
-        });
-        account1GasFees = await getGasCosts(receiptAccount1);
+        receiptAccount1 = await this.token.purchase(
+          editionNumber1, 
+          edition1Price.add(overspend), // add the overspend
+          {from: account1}
+        );
+        account1GasFees = toBN(0);
+        //account1GasFees = await getGasCosts(receiptAccount1);
 
         // post balances
         postAccount1Balance = await getBalance(account1);
@@ -1642,9 +1679,10 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       let totalSupplyEdition = await this.token.totalSupplyEdition(editionNumber3);
       totalSupplyEdition.should.be.eq.BN(minted);
 
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account2})
       // Mint two more to make the edition sold out
-      await this.token.purchase(editionNumber3, {from: account2, value: edition3Price});
-      await this.token.purchase(editionNumber3, {from: account2, value: edition3Price});
+      await this.token.purchase(editionNumber3,  edition3Price, {from: account2});
+      await this.token.purchase(editionNumber3,  edition3Price, {from: account2});
 
       let tokensOf = await this.token.tokensOf(account2);
       tokensOf
@@ -1659,7 +1697,7 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       totalSupplyEdition.should.be.eq.BN(minted + 2);
 
       // Reverts as sold out
-      await assertRevert(this.token.purchase(editionNumber3, {from: account2}));
+      await assertRevert(this.token.purchase(editionNumber3, edition3Price, {from: account2}));
 
       // Under minting is disabled
 
@@ -1707,9 +1745,10 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
     });
 
     it('should prevent updating minted number if tokens sold outways update', async () => {
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
       // Sell two
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
 
       let totalSupplyEdition = await this.token.totalSupplyEdition(editionNumber1);
       totalSupplyEdition.should.be.eq.BN(2);
@@ -1753,9 +1792,10 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
     });
 
     it('should prevent updating available number if tokens sold outways update', async () => {
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
       // Sell two
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
-      await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
 
       let totalAvailableEdition = await this.token.totalAvailableEdition(editionNumber1);
       totalAvailableEdition.should.be.eq.BN(3);
@@ -1792,8 +1832,9 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
         // Create edition
         await this.token.createActiveEdition(editionNumber1, editionData1, editionType, 0, 0, artistAccount, artistShare, edition1Price, editionTokenUri1, 3, {from: _owner});
 
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account3})
         // Create token
-        await this.token.purchase(editionNumber1, {from: account3, value: edition1Price});
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account3});
 
         // Confirm the token is owned by the purchaser
         let tokensOf = await this.token.tokensOf(account3);
@@ -1844,18 +1885,20 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
 
       beforeEach(async () => {
         // Mint token - account 3
-        await this.token.purchase(editionNumber1, {from: account3, value: edition1Price});
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account3})
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account3});
         let tokensOf = await this.token.tokensOf(account3);
         tokensOf.map(e => e.toNumber()).should.be.deep.equal([_100001]);
 
         // Mint token - account 1
-        await this.token.purchase(editionNumber1, {from: account1, value: edition1Price});
+        await this.erc20.approve(this.token.address, etherToWei(9999), {from: account1})
+        await this.token.purchase(editionNumber1,  edition1Price, {from: account1});
         tokensOf = await this.token.tokensOf(account1);
         tokensOf.map(e => e.toNumber()).should.be.deep.equal([_100002]);
 
         // Under minting is disabled
         // Mint token - account 2
-        // await this.token.purchase(editionNumber2, {from: account2, value: edition2Price});
+        // await this.token.purchase(editionNumber2,  edition2Price, {from: account2});
         // tokensOf = await this.token.tokensOf(account2);
         // tokensOf.map(e => e.toNumber()).should.be.deep.equal([_200003]);
 
@@ -2014,8 +2057,8 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       //    await assertRevert(this.token.underMint(account3, editionNumber2, {from: _owner}));
 
       //    // Check you cannot purchase
-      //    await assertRevert(this.token.purchase(editionNumber2, {from: account1, value: edition2Price}));
-      //    await assertRevert(this.token.purchaseTo(account1, editionNumber2, {from: account2, value: edition2Price}));
+      //    await assertRevert(this.token.purchase(editionNumber2,  edition2Price, {from: account1}));
+      //    await assertRevert(this.token.purchaseTo(account1, editionNumber2,  edition2Price, {from: account2}));
       //  });
 
       //});
@@ -2033,15 +2076,15 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
       //   it('should be able to mint more tokens once burnt', async () => {
 
       //     // purchase the remaining token
-      //     await this.token.purchase(editionNumber2, {from: account1, value: edition2Price});
+      //     await this.token.purchase(editionNumber2,  edition2Price, {from: account1});
 
       //     // 200001 is re-minted
       //     let tokensOfEdition = await this.token.tokensOfEdition(editionNumber2);
       //     tokensOfEdition.map(e => e.toNumber()).should.be.deep.equal([_200003, 0, _200004]);
 
       //     // Check you cannot purchase/mint
-      //     await assertRevert(this.token.purchase(editionNumber2, {from: account1, value: edition2Price}));
-      //     await assertRevert(this.token.purchaseTo(account1, editionNumber2, {from: account2, value: edition2Price}));
+      //     await assertRevert(this.token.purchase(editionNumber2,  edition2Price, {from: account1}));
+      //     await assertRevert(this.token.purchaseTo(account1, editionNumber2,  edition2Price, {from: account2}));
       //     await assertRevert(this.token.mint(account3, editionNumber2, {from: _owner}));
 
       //     // However you can under mint the missing tokens
@@ -2072,12 +2115,15 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
     beforeEach(async () => {
       await this.token.createActiveEdition(editionNumber1, editionData1, editionType, 0, 0, artistAccount, artistShare, edition1Price, editionTokenUri1, 3, {from: _owner});
 
+
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account2})
       // Account2 owns first 2 tokens
-      await this.token.purchase(editionNumber1, {from: account2, value: edition1Price});
-      await this.token.purchase(editionNumber1, {from: account2, value: edition1Price});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account2});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account2});
 
       // Account3 owns the last one
-      await this.token.purchase(editionNumber1, {from: account3, value: edition1Price});
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account3})
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account3});
     });
 
     it('should transfer all tokens defined', async () => {
@@ -2144,12 +2190,15 @@ contract('NotRealDigitalAssetV2 - custom', function (accounts) {
     beforeEach(async () => {
       await this.token.createActiveEdition(editionNumber1, editionData1, editionType, 0, 0, artistAccount, artistShare, edition1Price, editionTokenUri1, 3, {from: _owner});
 
-      // Account2 owns first 2 tokens
-      await this.token.purchase(editionNumber1, {from: account2, value: edition1Price});
-      await this.token.purchase(editionNumber1, {from: account2, value: edition1Price});
 
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account2})
+      // Account2 owns first 2 tokens
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account2});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account2});
+
+      await this.erc20.approve(this.token.address, etherToWei(9999), {from: account3})
       // Account3 owns the last one
-      await this.token.purchase(editionNumber1, {from: account3, value: edition1Price});
+      await this.token.purchase(editionNumber1,  edition1Price, {from: account3});
     });
 
     it('should transfer all tokens defined', async () => {

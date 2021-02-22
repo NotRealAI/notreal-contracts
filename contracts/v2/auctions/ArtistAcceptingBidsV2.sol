@@ -6,6 +6,11 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "./INRDAV2.sol";
 import "../../forwarder/NativeMetaTransaction.sol";
 
+// ERC20
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+
+
 
 /**
 * Auction V2 interface definition - event and method definitions
@@ -65,9 +70,9 @@ interface IAuctionV2 {
     address indexed _auctioneer
   );
 
-  function placeBid(uint256 _editionNumber) payable external returns (bool success);
+  function placeBid(uint256 _editionNumber, uint256 _msgValue) external returns (bool success);
 
-  function increaseBid(uint256 _editionNumber) payable external returns (bool success);
+  function increaseBid(uint256 _editionNumber, uint256 _msgValue) external returns (bool success);
 
   function withdrawBid(uint256 _editionNumber) external returns (bool success);
 
@@ -124,6 +129,7 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
   }
 
   using SafeMath for uint256;
+  using SafeERC20 for IERC20;
 
   // A mapping of the controller address to the edition number
   mapping(uint256 => address) public editionNumberToArtistControlAddress;
@@ -149,6 +155,9 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
   // NR account which can receive commission
   address public nrCommissionAccount;
 
+  // Accepted ERC20 token
+  IERC20 public acceptedToken;
+
   ///////////////
   // Modifiers //
   ///////////////
@@ -166,23 +175,23 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
   }
 
   // Checks the bid is higher than the current amount + min bid
-  modifier whenPlacedBidIsAboveMinAmount(uint256 _editionNumber) {
-    address currentHighestBidder = editionHighestBid[_editionNumber];
-    uint256 currentHighestBidderAmount = editionBids[_editionNumber][currentHighestBidder];
-    require(currentHighestBidderAmount.add(minBidAmount) <= msg.value, "Bids must be higher than previous bids plus minimum bid");
+  modifier whenPlacedBidIsAboveMinAmount(uint256 _editionNumber, uint256 _msgValue) {
+    //address currentHighestBidder = editionHighestBid[_editionNumber];
+    uint256 currentHighestBidderAmount = editionBids[_editionNumber][editionHighestBid[_editionNumber]];
+    require(currentHighestBidderAmount.add(minBidAmount) <= _msgValue, "Bids must be higher than previous bids plus minimum bid");
     _;
   }
 
   // Checks the bid is higher than the min bid
-  modifier whenBidIncreaseIsAboveMinAmount() {
-    require(minBidAmount <= msg.value, "Bids must be higher than minimum bid amount");
+  modifier whenBidIncreaseIsAboveMinAmount(uint256 _msgValue) {
+    require(minBidAmount <= _msgValue, "Bids must be higher than minimum bid amount");
     _;
   }
 
   // Check the caller in not already the highest bidder
   modifier whenCallerNotAlreadyTheHighestBidder(uint256 _editionNumber) {
-    address currentHighestBidder = editionHighestBid[_editionNumber];
-    require(currentHighestBidder != _msgSender(), "Cant bid anymore, you are already the current highest");
+    //address currentHighestBidder = editionHighestBid[_editionNumber];
+    require(editionHighestBid[_editionNumber] != _msgSender(), "Cant bid anymore, you are already the current highest");
     _;
   }
 
@@ -211,9 +220,10 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
   /////////////////
 
   // Set the caller as the default NR account
-  constructor(INRDAV2 _nrdaAddress) public {
+  constructor(INRDAV2 _nrdaAddress, IERC20 _acceptedToken) public {
     nrdaAddress = _nrdaAddress;
     nrCommissionAccount = _msgSender();
+    acceptedToken = _acceptedToken;
     _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
     _setupRole(ROLE_WHITELISTED, _msgSender());
   }
@@ -229,33 +239,34 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
    * - Edition provided is not configured for auctions
    * - Edition provided is sold out
    * - _msgSender() is already the highest bidder
-   * - msg.value is not greater than highest bid + minimum amount
+   * - _msgValue is not greater than highest bid + minimum amount
    * @dev refunds the previous bidders ether if the bid is overwritten
    * @return success true on success
    */
-  function placeBid(uint256 _editionNumber)
+  function placeBid(uint256 _editionNumber, uint256 _msgValue)
   public
   override
-  payable
   whenNotPaused
   whenEditionExists(_editionNumber)
   whenAuctionEnabled(_editionNumber)
-  whenPlacedBidIsAboveMinAmount(_editionNumber)
+  whenPlacedBidIsAboveMinAmount(_editionNumber, _msgValue)
   whenCallerNotAlreadyTheHighestBidder(_editionNumber)
   whenEditionNotSoldOut(_editionNumber)
   returns (bool success)
   {
+
+    acceptedToken.safeTransferFrom(_msgSender(), address(this), _msgValue);
     // Grab the previous holders bid so we can refund it
     _refundHighestBidder(_editionNumber);
 
     // Keep a record of the current users bid (previous bidder has been refunded)
-    editionBids[_editionNumber][_msgSender()] = msg.value;
+    editionBids[_editionNumber][_msgSender()] = _msgValue;
 
     // Update the highest bid to be the latest bidder
     editionHighestBid[_editionNumber] = _msgSender();
 
     // Emit event
-    emit BidPlaced(_msgSender(), _editionNumber, msg.value);
+    emit BidPlaced(_msgSender(), _editionNumber, _msgValue);
 
     return true;
   }
@@ -269,20 +280,20 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
    * - _msgSender() is not the current highest bidder
    * @return success true on success
    */
-  function increaseBid(uint256 _editionNumber)
+  function increaseBid(uint256 _editionNumber, uint256 _msgValue)
   public
   override
-  payable
   whenNotPaused
-  whenBidIncreaseIsAboveMinAmount
+  whenBidIncreaseIsAboveMinAmount(_msgValue)
   whenEditionExists(_editionNumber)
   whenAuctionEnabled(_editionNumber)
   whenEditionNotSoldOut(_editionNumber)
   whenCallerIsHighestBidder(_editionNumber)
   returns (bool success)
   {
+    acceptedToken.safeTransferFrom(_msgSender(), address(this), _msgValue);
     // Bump the current highest bid by provided amount
-    editionBids[_editionNumber][_msgSender()] = editionBids[_editionNumber][_msgSender()].add(msg.value);
+    editionBids[_editionNumber][_msgSender()] = editionBids[_editionNumber][_msgSender()].add(_msgValue);
 
     // Emit event
     emit BidIncreased(_msgSender(), _editionNumber, editionBids[_editionNumber][_msgSender()]);
@@ -429,7 +440,8 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
 
     // Extract the artists commission and send it
     uint256 artistPayment = _winningBidAmount.div(100).mul(artistCommission);
-    payable(artistAccount).transfer(artistPayment);
+    acceptedToken.safeTransfer(artistAccount, artistPayment);
+    //payable(artistAccount).transfer(artistPayment);
 
     // Optional Commission Splits
     (uint256 optionalCommissionRate, address optionalCommissionRecipient) = nrdaAddress.editionOptionalCommission(_editionNumber);
@@ -438,12 +450,14 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
     uint256 rateSplit = 0;
     if (optionalCommissionRate > 0) {
       rateSplit = _winningBidAmount.div(100).mul(optionalCommissionRate);
-      payable(optionalCommissionRecipient).transfer(rateSplit);
+      acceptedToken.safeTransfer(optionalCommissionRecipient, rateSplit);
+      //payable(optionalCommissionRecipient).transfer(rateSplit);
     }
 
     // Send NR remaining amount
     uint256 remainingCommission = _winningBidAmount.sub(artistPayment).sub(rateSplit);
-    payable(nrCommissionAccount).transfer(remainingCommission);
+    acceptedToken.safeTransfer(nrCommissionAccount, remainingCommission);
+    //payable(nrCommissionAccount).transfer(remainingCommission);
   }
 
   /**
@@ -462,7 +476,8 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
       delete editionHighestBid[_editionNumber];
 
       // Refund it
-      payable(currentHighestBidder).transfer(currentHighestBiddersAmount);
+      acceptedToken.safeTransfer(currentHighestBidder, currentHighestBiddersAmount);
+      //payable(currentHighestBidder).transfer(currentHighestBiddersAmount);
 
       // Emit event
       emit BidderRefunded(_editionNumber, currentHighestBidder, currentHighestBiddersAmount);
@@ -591,30 +606,38 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
   // Manual Override methods //
   /////////////////////////////
 
+  function reclaimEther() external onlyOwner {
+    payable(owner()).transfer(address(this).balance);
+    acceptedToken.transfer(owner(), acceptedToken.balanceOf(address(this)));
+  }
+  
   /**
    * @dev Allows for the ability to extract ether so we can distribute to the correct bidders accordingly
    * @dev Only callable from whitelist
    */
-  function withdrawStuckEther(address _withdrawalAccount)
-  onlyIfWhitelisted(_msgSender())
-  public {
-    require(_withdrawalAccount != address(0), "Invalid address provided");
-    require(address(this).balance != 0, "No more ether to withdraw");
-    payable(_withdrawalAccount).transfer(address(this).balance);
-  }
+  //function withdrawStuckEther(address _withdrawalAccount)
+  //public {
+  //  require(_withdrawalAccount != address(0), "Invalid address provided");
+  //  require(acceptedToken.balanceOf(address(this)) != 0, "No more ether to withdraw");
+  //  //require(address(this).balance != 0, "No more ether to withdraw");
+  //  acceptedToken.transfer(_withdrawalAccount, acceptedToken.balanceOf(address(this)));
+  //  payable(_withdrawalAccount).transfer(address(this).balance);
+  //}
 
-  /**
-   * @dev Allows for the ability to extract specific ether amounts so we can distribute to the correct bidders accordingly
-   * @dev Only callable from whitelist
-   */
-  function withdrawStuckEtherOfAmount(address _withdrawalAccount, uint256 _amount)
-  onlyIfWhitelisted(_msgSender())
-  public {
-    require(_withdrawalAccount != address(0), "Invalid address provided");
-    require(_amount != 0, "Invalid amount to withdraw");
-    require(address(this).balance >= _amount, "No more ether to withdraw");
-    payable(_withdrawalAccount).transfer(_amount);
-  }
+  ///**
+  // * @dev Allows for the ability to extract specific ether amounts so we can distribute to the correct bidders accordingly
+  // * @dev Only callable from whitelist
+  // */
+  //function withdrawStuckEtherOfAmount(address _withdrawalAccount, uint256 _amount)
+  //onlyIfWhitelisted(_msgSender())
+  //public {
+  //  require(_withdrawalAccount != address(0), "Invalid address provided");
+  //  require(_amount != 0, "Invalid amount to withdraw");
+  //  require(acceptedToken.balanceOf(address(this)) >= _amount, "No more ether to withdraw");
+  //  //require(address(this).balance >= _amount, "No more ether to withdraw");
+  //  acceptedToken.transfer(_withdrawalAccount, acceptedToken.balanceOf(address(this)));
+  //  //payable(_withdrawalAccount).transfer(_amount);
+  //}
 
   /**
    * @dev Manual override method for setting edition highest bid & the highest bidder to the provided address

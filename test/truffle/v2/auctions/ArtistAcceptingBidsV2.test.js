@@ -1,6 +1,8 @@
 const getGasCosts = require('../../../helpers/getGasCosts');
 const addEditionCreators = require('../../../helpers/nrda');
-const getBalance = require('../../../helpers/getBalance');
+const getEtherBalance = require('../../../helpers/getBalance');
+const getTokenBalance = require('../../../helpers/getTokenBalance');
+let getBalance;
 const toBN = require('../../../helpers/toBN');
 const assertRevert = require('../../../helpers/assertRevert');
 const etherToWei = require('../../../helpers/etherToWei');
@@ -11,6 +13,7 @@ const _ = require('lodash');
 const ForceEther = artifacts.require('ForceEther');
 const NotRealDigitalAssetV2 = artifacts.require('NotRealDigitalAssetV2');
 const ArtistAcceptingBidsV2 = artifacts.require('ArtistAcceptingBidsV2');
+const ERC20Mock = artifacts.require('ERC20Mock');
 
 require('chai')
   .use(require('chai-as-promised'))
@@ -44,11 +47,20 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
   const totalAvailable = 5;
 
   beforeEach(async () => {
+    this.erc20 = await ERC20Mock.new('Token', 'MTKN', _owner, 0, {from:_owner});
+    getBalance = getTokenBalance(this.erc20);
+
     // Create contracts
-    this.nrda = await NotRealDigitalAssetV2.new({from: _owner});
+    this.nrda = await NotRealDigitalAssetV2.new(this.erc20.address, {from: _owner});
     addEditionCreators(this.nrda);
 
-    this.auction = await ArtistAcceptingBidsV2.new(this.nrda.address, {from: _owner});
+    this.auction = await ArtistAcceptingBidsV2.new(this.nrda.address, this.erc20.address, {from: _owner});
+
+    await Promise.all(accounts.slice(0,8).map(async acct => {
+      await this.erc20.mint(acct, etherToWei(9999), { from: _owner })
+      await this.erc20.approve(this.nrda.address, etherToWei(9999), {from: acct});
+      await this.erc20.approve(this.auction.address, etherToWei(9999), {from: acct});
+    }))
 
     // Update the commission account to be something different than owner
     await this.auction.setNrCommissionAccount(nrCommission, {from: _owner});
@@ -112,7 +124,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
   describe('placing a bid', async () => {
 
     it('fails if not set up', async () => {
-      await assertRevert(this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+      await assertRevert(this.auction.placeBid(editionNumber1, this.minBidAmount, {from: bidder1}));
     });
 
     describe('once auction setup enabled', async () => {
@@ -141,7 +153,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       describe('can make a simple bid', async () => {
 
         beforeEach(async () => {
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+          await this.erc20.approve(this.auction.address, etherToWei(9999), {from: bidder1});
+          await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
         });
 
         it('should be highest bidder', async () => {
@@ -158,11 +171,11 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
         });
 
         it('another bidder cant place a bid at the same value as you', async () => {
-          assertRevert(this.auction.placeBid(editionNumber1, {from: bidder2, value: this.minBidAmount}));
+          assertRevert(this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder2}));
         });
 
         it('another bidder cant place a bid below value of yours', async () => {
-          assertRevert(this.auction.placeBid(editionNumber1, {from: bidder2, value: this.minBidAmount.sub(toBN(1))}));
+          assertRevert(this.auction.placeBid(editionNumber1,  this.minBidAmount.sub(toBN(1)), {from: bidder2}));
         });
 
         it('contract holds bid value', async () => {
@@ -172,16 +185,14 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
         describe('once a bid is made you can increase it', async () => {
           it('will fail if the same bidder makes another bid', async () => {
-            await assertRevert(this.auction.placeBid(editionNumber1, {
-              from: bidder1,
-              value: this.minBidAmount.mul(toBN(2))
+            await assertRevert(this.auction.placeBid(editionNumber1, this.minBidAmount.mul(toBN(2)), {
+              from: bidder1
             }));
           });
 
           it('can still increase bid once set', async () => {
-            await this.auction.increaseBid(editionNumber1, {
-              from: bidder1,
-              value: this.minBidAmount
+            await this.auction.increaseBid(editionNumber1, this.minBidAmount, {
+              from: bidder1
             });
 
             // Check still highest bid
@@ -215,7 +226,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
             auctionBeforeBalance = await getBalance(this.auction.address);
 
             let tx = await this.auction.withdrawBid(editionNumber1, {from: bidder1});
-            txGasCosts = await getGasCosts(tx);
+            txGasCosts = toBN(0);
+            //txGasCosts = await getGasCosts(tx);
 
             bidder1AfterBalance = await getBalance(bidder1);
             auctionAfterBalance = await getBalance(this.auction.address);
@@ -346,7 +358,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
               contractBalanceBefore = await getBalance(this.auction.address);
 
               let tx = await this.auction.acceptBid(editionNumber1, {from: artistAccount2});
-              txGasCosts = await getGasCosts(tx);
+              //txGasCosts = await getGasCosts(tx);
+              txGasCosts = toBN(0);
 
               artistAccount1BalanceAfter = await getBalance(artistAccount1);
               artistAccount2BalanceAfter = await getBalance(artistAccount2);
@@ -438,7 +451,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
               contractBalanceBefore = await getBalance(this.auction.address);
 
               let tx = await this.auction.acceptBid(editionNumber1, {from: _owner});
-              txGasCosts = await getGasCosts(tx);
+              //txGasCosts = await getGasCosts(tx);
+              txGasCosts = toBN(0);
 
               artistAccount1BalanceAfter = await getBalance(artistAccount1);
               ownerBalanceAfter = await getBalance(_owner);
@@ -540,7 +554,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
               contractBalanceBefore = await getBalance(this.auction.address);
 
               let tx = await this.auction.acceptBid(editionNumber1, {from: _owner});
-              txGasCosts = await getGasCosts(tx);
+              //txGasCosts = await getGasCosts(tx);
+              txGasCosts = toBN(0);
 
               artistAccount1BalanceAfter = await getBalance(artistAccount1);
               artistAccount2BalanceAfter = await getBalance(artistAccount2);
@@ -628,7 +643,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
 
       // Place a bid on the edition
-      await this.auction.placeBid(editionNumber1, {from: theBidder, value: this.minBidAmount});
+      await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: theBidder});
     });
 
     it('bid has been placed', async () => {
@@ -678,7 +693,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
         contractBalanceBefore = await getBalance(this.auction.address);
 
         let tx = await this.auction.withdrawBid(editionNumber1, {from: theBidder});
-        txGasCosts = await getGasCosts(tx);
+        //txGasCosts = await getGasCosts(tx);
+        txGasCosts = toBN(0);
 
         contractBalanceAfter = await getBalance(this.auction.address);
         bidderBalanceAfter = await getBalance(theBidder);
@@ -707,7 +723,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       });
 
       it('cant increase your bid once its been withdrawn', async () => {
-        await assertRevert(this.auction.increaseBid(editionNumber1, {from: theBidder, value: this.minBidAmount}));
+        await assertRevert(this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: theBidder}));
       });
 
       it('cant withdraw your bid once its been withdrawn', async () => {
@@ -715,7 +731,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       });
 
       it('can place a new bid once its been withdrawn', async () => {
-        await this.auction.placeBid(editionNumber1, {from: theBidder, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: theBidder});
 
         let details = await this.auction.highestBidForEdition(editionNumber1);
         details[0].should.be.equal(theBidder);
@@ -733,39 +749,37 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     });
 
     it('cant increase it when no bid exists', async () => {
-      await assertRevert(this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+      await assertRevert(this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1}));
     });
 
     describe('when the bid is made', async () => {
       const theBidder = bidder1;
 
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: theBidder, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: theBidder});
       });
 
       it('cant increase your bid by less than min value', async () => {
-        await assertRevert(this.auction.increaseBid(editionNumber1, {
-          from: bidder1,
-          value: this.minBidAmount.sub(toBN(1))
+        await assertRevert(this.auction.increaseBid(editionNumber1, this.minBidAmount.sub(toBN(1)), {
+          from: bidder1
         }));
       });
 
       it('cant increase your bid if you are no longer the top bidder', async () => {
 
-        await this.auction.placeBid(editionNumber1, {from: bidder2, value: this.minBidAmount.mul(toBN(2))});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount.mul(toBN(2)), {from: bidder2});
 
-        await assertRevert(this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+        await assertRevert(this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1}));
       });
 
       it('cant increase your bid if paused', async () => {
         await this.auction.pause({from: _owner});
-        await assertRevert(this.auction.placeBid(editionNumber1, {
-          from: bidder2,
-          value: this.minBidAmount.mul(toBN(2))
+        await assertRevert(this.auction.placeBid(editionNumber1, this.minBidAmount.mul(toBN(2)), {
+          from: bidder2
         }));
 
         await this.auction.unpause({from: _owner});
-        await this.auction.placeBid(editionNumber1, {from: bidder2, value: this.minBidAmount.mul(toBN(2))});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount.mul(toBN(2)), {from: bidder2});
       });
 
       it('can increase the bid once you are the highest bidder', async () => {
@@ -776,7 +790,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
         detailsBefore[0].should.be.equal(bidder1);
         detailsBefore[1].should.be.eq.BN(this.minBidAmount);
 
-        await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         let detailsAfter = await this.auction.highestBidForEdition(editionNumber1);
         detailsAfter[0].should.be.equal(bidder1);
@@ -787,10 +801,10 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       });
 
       it('can increase your bid multiple times', async () => {
-        await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-        await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-        await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-        await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
+        await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
+        await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
+        await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         let detailsAfter = await this.auction.highestBidForEdition(editionNumber1);
         detailsAfter[0].should.be.equal(bidder1);
@@ -813,10 +827,11 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount1, {from: _owner});
       bidder1_BalanceBeforeBid = await getBalance(bidder1);
 
-      let tx = await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+      let tx = await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
       bidder1_BalanceAfterBid = await getBalance(bidder1);
-      txGasCosts = await getGasCosts(tx);
+      //txGasCosts = await getGasCosts(tx);
+      txGasCosts = toBN(0)
     });
 
     it('bidder 1 is highest bidder', async () => {
@@ -851,8 +866,9 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
         bidder2_BalanceBeforeBid = await getBalance(bidder2);
 
-        let tx = await this.auction.placeBid(editionNumber1, {from: bidder2, value: _2ndBid});
-        txGasCosts = await getGasCosts(tx);
+        let tx = await this.auction.placeBid(editionNumber1,  _2ndBid, {from: bidder2});
+        //txGasCosts = await getGasCosts(tx);
+        txGasCosts = toBN(0);
 
         bidder2_BalanceAfterBid = await getBalance(bidder2);
         bidder1_BalanceAfterBeingOutBid = await getBalance(bidder1);
@@ -896,8 +912,9 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
           _3rdBid = this.minBidAmount.mul(toBN(4));
           bidder3_BalanceBeforeBid = await getBalance(bidder3);
 
-          let tx = await this.auction.placeBid(editionNumber1, {from: bidder3, value: _3rdBid});
-          txGasCosts = await getGasCosts(tx);
+          let tx = await this.auction.placeBid(editionNumber1,  _3rdBid, {from: bidder3});
+          //txGasCosts = await getGasCosts(tx);
+          txGasCosts = toBN(0)
 
           bidder3_BalanceAfterBid = await getBalance(bidder3);
           bidder2_BalanceAfterBeingOutBid = await getBalance(bidder2);
@@ -941,8 +958,9 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
             _4thBid = this.minBidAmount.mul(toBN(5));
             bidder4_BalanceBeforeBid = await getBalance(bidder4);
 
-            let tx = await this.auction.placeBid(editionNumber1, {from: bidder4, value: _4thBid});
-            txGasCosts = await getGasCosts(tx);
+            let tx = await this.auction.placeBid(editionNumber1,  _4thBid, {from: bidder4});
+            txGasCosts = toBN(0);
+            //txGasCosts = await getGasCosts(tx);
 
             bidder4_BalanceAfterBid = await getBalance(bidder4);
             bidder3_BalanceAfterBeingOutBid = await getBalance(bidder3);
@@ -1016,17 +1034,17 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     describe('stuck ether', async () => {
       describe('withdrawing everything', async () => {
         it('fails when no ether left to withdraw', async () => {
-          await assertRevert(this.auction.withdrawStuckEther(_owner, {from: _owner}));
+          await assertRevert(this.auction.reclaimEther({from: _owner}));
         });
 
         it('is successful when owner and eth present to withdraw', async () => {
           await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+          await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
           const auctionBalance = await getBalance(this.auction.address);
           auctionBalance.should.be.eq.BN(this.minBidAmount);
 
-          await this.auction.withdrawStuckEther(_owner, {from: _owner});
+          await this.auction.reclaimEther({from: _owner});
 
           const newAuctionBalance = await getBalance(this.auction.address);
           newAuctionBalance.should.be.eq.BN(0);
@@ -1034,34 +1052,59 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
         it('fails when NOT owner', async () => {
           await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+          await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
           const auctionBalance = await getBalance(this.auction.address);
           auctionBalance.should.be.eq.BN(this.minBidAmount);
 
-          await assertRevert(this.auction.withdrawStuckEther(_owner, {from: bidder1}));
+          await assertRevert(this.auction.reclaimEther({from: bidder1}));
         });
 
         it('fails when address is zero', async () => {
           await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+          await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
           const auctionBalance = await getBalance(this.auction.address);
           auctionBalance.should.be.eq.BN(this.minBidAmount);
 
-          await assertRevert(this.auction.withdrawStuckEther(ZERO_ADDRESS, {from: _owner}));
+          await assertRevert(this.auction.reclaimEther({from: _owner}));
         });
 
         it('force ether can still be withdrawn', async () => {
           const forceEther = await ForceEther.new({value: this.minBidAmount});
           await forceEther.destroyAndSend(this.auction.address);
+          const forcedBalance = await getEtherBalance(this.auction.address);
+          forcedBalance.should.be.eq.BN(this.minBidAmount);
+
+          const ownerPreBalance = await getEtherBalance(_owner);
+
+          const tx = await this.auction.reclaimEther({from: _owner});
+          const txGasCosts = await getGasCosts(tx);
+
+          const ownerPostBalance = await getEtherBalance(_owner);
+
+          const postWithdrawalAuctionBalance = await getEtherBalance(this.auction.address);
+          postWithdrawalAuctionBalance.should.be.eq.BN(0);
+
+          ownerPostBalance.should.be.eq.BN(
+            ownerPreBalance
+              .sub(txGasCosts) // owner pays fee
+              .add(this.minBidAmount) // gets all stuck ether sent to them
+          );
+        });
+
+        it('tokens can be withdrawn', async () => {
+          //const forceEther = await ForceEther.new({value: this.minBidAmount});
+          //await forceEther.destroyAndSend(this.auction.address);
+          await this.erc20.mint(this.auction.address, this.minBidAmount, { from: _owner });
+
           const forcedBalance = await getBalance(this.auction.address);
           forcedBalance.should.be.eq.BN(this.minBidAmount);
 
           const ownerPreBalance = await getBalance(_owner);
 
-          const tx = await this.auction.withdrawStuckEther(_owner, {from: _owner});
-          const txGasCosts = await getGasCosts(tx);
+          const tx = await this.auction.reclaimEther({from: _owner});
+          const txGasCosts = toBN(0);
 
           const ownerPostBalance = await getBalance(_owner);
 
@@ -1074,83 +1117,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
               .add(this.minBidAmount) // gets all stuck ether sent to them
           );
         });
-      });
 
-      describe('withdrawing specific amount', async () => {
 
-        const PARTIAL_WITHDRAWAL_AMOUNT = etherToWei(0.0001);
-
-        it('fails when no ether left to withdraw', async () => {
-          await assertRevert(this.auction.withdrawStuckEtherOfAmount(_owner, PARTIAL_WITHDRAWAL_AMOUNT, {from: _owner}));
-        });
-
-        it('is successful when owner and eth present to withdraw', async () => {
-          await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-
-          const auctionBalance = await getBalance(this.auction.address);
-          auctionBalance.should.be.eq.BN(this.minBidAmount);
-
-          await this.auction.withdrawStuckEtherOfAmount(_owner, PARTIAL_WITHDRAWAL_AMOUNT, {from: _owner});
-
-          const newAuctionBalance = await getBalance(this.auction.address);
-          newAuctionBalance.should.be.eq.BN(this.minBidAmount.sub(PARTIAL_WITHDRAWAL_AMOUNT));
-        });
-
-        it('fails when NOT owner', async () => {
-          await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-
-          const auctionBalance = await getBalance(this.auction.address);
-          auctionBalance.should.be.eq.BN(this.minBidAmount);
-
-          await assertRevert(this.auction.withdrawStuckEtherOfAmount(_owner, PARTIAL_WITHDRAWAL_AMOUNT, {from: bidder1}));
-        });
-
-        it('fails when amount is zero', async () => {
-          await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-
-          const auctionBalance = await getBalance(this.auction.address);
-          auctionBalance.should.be.eq.BN(this.minBidAmount);
-
-          await assertRevert(this.auction.withdrawStuckEtherOfAmount(_owner, 0, {from: _owner}));
-        });
-
-        it('fails when address is zero', async () => {
-          await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount2, {from: _owner});
-          await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
-
-          const auctionBalance = await getBalance(this.auction.address);
-          auctionBalance.should.be.eq.BN(this.minBidAmount);
-
-          await assertRevert(this.auction.withdrawStuckEtherOfAmount(ZERO_ADDRESS, PARTIAL_WITHDRAWAL_AMOUNT, {from: _owner}));
-        });
-
-        it('force ether can still be withdrawn', async () => {
-          const forceEther = await ForceEther.new({value: this.minBidAmount});
-          await forceEther.destroyAndSend(this.auction.address);
-          const forcedBalance = await getBalance(this.auction.address);
-          forcedBalance.should.be.eq.BN(this.minBidAmount);
-
-          const ownerPreBalance = await getBalance(_owner);
-
-          const tx = await this.auction.withdrawStuckEtherOfAmount(_owner, PARTIAL_WITHDRAWAL_AMOUNT, {from: _owner});
-          const txGasCosts = await getGasCosts(tx);
-
-          const ownerPostBalance = await getBalance(_owner);
-
-          const postWithdrawalAuctionBalance = await getBalance(this.auction.address);
-          postWithdrawalAuctionBalance.should.be.eq.BN(
-            this.minBidAmount.sub(PARTIAL_WITHDRAWAL_AMOUNT)
-          );
-
-          ownerPostBalance.should.be.eq.BN(
-            ownerPreBalance
-              .sub(txGasCosts) // owner pays fee
-              .add(PARTIAL_WITHDRAWAL_AMOUNT) // gets partial stuck ether sent to them
-          );
-        });
       });
     });
 
@@ -1226,7 +1194,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
       beforeEach(async () => {
         await this.auction.setArtistsControlAddressAndEnabledEdition(editionNumber1, artistAccount1, {from: _owner});
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
       });
 
       describe('manually overriding edition bid', async () => {
@@ -1257,7 +1225,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
         });
 
         it('can still increase bid', async () => {
-          await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+          await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
           let details = await this.auction.auctionDetails(editionNumber1);
           details[0].should.be.equal(true); // bool _enabled
@@ -1271,7 +1239,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
           // min bid plus the current overridden
           const newBidValue = this.minBidAmount.add(AMOUNT_BID_OVERRIDDEN_TO);
-          await this.auction.placeBid(editionNumber1, {from: bidder2, value: newBidValue});
+          await this.auction.placeBid(editionNumber1,  newBidValue, {from: bidder2});
 
           const afterBeingOutBidBalance = await getBalance(bidder1);
 
@@ -1306,7 +1274,8 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
             // Artists accepts the bid
             let txs = await this.auction.acceptBid(editionNumber1, {from: artistAccount1});
-            gasSpent = await getGasCosts(txs);
+            gasSpent = toBN(0);
+            //gasSpent = await getGasCosts(txs);
 
             artistAccount1BalanceAfter = await getBalance(artistAccount1);
           });
@@ -1373,7 +1342,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
           });
 
           it('bidder cannot increase there previous bid', async () => {
-            await assertRevert(this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+            await assertRevert(this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1}));
           });
 
           it('bidder cannot withdraw there previous bid', async () => {
@@ -1382,7 +1351,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
           it('the same bidder can place a new bid', async () => {
             // places new bid
-            await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+            await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
             // they are then the winner again
             let details = await this.auction.auctionDetails(editionNumber1);
@@ -1392,7 +1361,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
             details[3].should.be.equal(artistAccount1); // uint256 _value
 
             // can still be out bid
-            await this.auction.placeBid(editionNumber1, {from: bidder2, value: this.minBidAmount.mul(toBN(2))});
+            await this.auction.placeBid(editionNumber1,  this.minBidAmount.mul(toBN(2)), {from: bidder2});
 
             // bidder 2 is the new winner again
             details = await this.auction.auctionDetails(editionNumber1);
@@ -1408,7 +1377,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
           it('a new bidder can place a new bid', async () => {
             // places new bid
-            await this.auction.placeBid(editionNumber1, {from: bidder2, value: this.minBidAmount});
+            await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder2});
 
             // they are then the winner again
             let details = await this.auction.auctionDetails(editionNumber1);
@@ -1418,7 +1387,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
             details[3].should.be.equal(artistAccount1); // uint256 _value
 
             // can still be out bid
-            await this.auction.placeBid(editionNumber1, {from: bidder3, value: this.minBidAmount.mul(toBN(2))});
+            await this.auction.placeBid(editionNumber1,  this.minBidAmount.mul(toBN(2)), {from: bidder3});
 
             // bidder 3 is the new winner again
             details = await this.auction.auctionDetails(editionNumber1);
@@ -1453,11 +1422,11 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
     describe('when it sells out before a auction is started', async () => {
       beforeEach(async () => {
-        await this.nrda.purchase(editionNumber1, {from: bidder2, value: edition1Price});
+        await this.nrda.purchase(editionNumber1,  edition1Price, {from: bidder2});
       });
 
       it('is not possible to placeBid', async () => {
-        await assertRevert(this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+        await assertRevert(this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1}));
       });
     });
 
@@ -1468,17 +1437,17 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
         totalRemaining.should.be.eq.BN(1);
 
         // Place bid
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         // sell edition out
-        await this.nrda.purchase(editionNumber1, {from: bidder2, value: edition1Price});
+        await this.nrda.purchase(editionNumber1,  edition1Price, {from: bidder2});
 
         totalRemaining = await this.nrda.totalRemaining(editionNumber1);
         totalRemaining.should.be.eq.BN(0);
       });
 
       it('is not possible to increaseBid', async () => {
-        await assertRevert(this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+        await assertRevert(this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1}));
       });
 
       it('is not possible to acceptBid', async () => {
@@ -1489,7 +1458,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     describe('when the accepting the bid sells out the edition', async () => {
       beforeEach(async () => {
         // Place bid
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         const totalRemaining = await this.nrda.totalRemaining(editionNumber1);
         totalRemaining.should.be.eq.BN(1);
@@ -1503,7 +1472,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
         totalRemaining.should.be.eq.BN(0);
 
         // fails when making a new bid as its sold out
-        await assertRevert(this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount}));
+        await assertRevert(this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1}));
       });
 
       it('edition is automatically set to disabled', async () => {
@@ -1555,7 +1524,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
       let isEditionEnabled = await this.auction.isEditionEnabled(editionNumber1);
       isEditionEnabled.should.be.equal(true);
 
-      await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+      await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
       await this.auction.disableEdition(editionNumber1, {from: _owner});
 
@@ -1585,7 +1554,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     describe('BidPlaced', async () => {
       let event;
       beforeEach(async () => {
-        const data = await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        const data = await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
         event = data.logs[0];
       });
 
@@ -1601,9 +1570,9 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     describe('BidIncreased', async () => {
       let event;
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
-        const data = await this.auction.increaseBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        const data = await this.auction.increaseBid(editionNumber1,  this.minBidAmount, {from: bidder1});
         event = data.logs[0];
       });
 
@@ -1619,7 +1588,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     describe('BidWithdrawn', async () => {
       let events;
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         const {logs} = await this.auction.withdrawBid(editionNumber1, {from: bidder1});
         events = logs;
@@ -1644,7 +1613,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     describe('BidAccepted', async () => {
       let events;
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         const {logs} = await this.auction.acceptBid(editionNumber1, {from: artistAccount1});
         events = logs;
@@ -1664,7 +1633,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
       let events;
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
         const {logs} = await this.auction.cancelAuction(editionNumber1, {from: _owner});
         events = logs;
       });
@@ -1688,12 +1657,11 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
       let events;
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
 
         // get out bid
-        const {logs} = await this.auction.placeBid(editionNumber1, {
-          from: bidder2,
-          value: this.minBidAmount.mul(toBN(2))
+        const {logs} = await this.auction.placeBid(editionNumber1, this.minBidAmount.mul(toBN(2)), {
+          from: bidder2
         });
         events = logs;
       });
@@ -1719,7 +1687,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
 
       let events;
       beforeEach(async () => {
-        await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+        await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
         const {logs} = await this.auction.rejectBid(editionNumber1, {from: artistAccount1});
         events = logs;
       });
@@ -1751,7 +1719,7 @@ contract('ArtistAcceptingBidsV2', function (accounts) {
     });
 
     it('when auction is open', async () => {
-      await this.auction.placeBid(editionNumber1, {from: bidder1, value: this.minBidAmount});
+      await this.auction.placeBid(editionNumber1,  this.minBidAmount, {from: bidder1});
       let details = await this.auction.highestBidForEdition(editionNumber1);
       details[0].should.be.equal(bidder1);
       details[1].should.be.eq.BN(this.minBidAmount);

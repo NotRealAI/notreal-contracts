@@ -2,6 +2,7 @@ const assertRevert = require('../../helpers/assertRevert');
 const addEditionCreators = require('../../helpers/nrda');
 const etherToWei = require('../../helpers/etherToWei');
 const bnChai = require('bn-chai');
+const ERC20Mock = artifacts.require('ERC20Mock');
 
 const _ = require('lodash');
 
@@ -37,7 +38,13 @@ contract('ArtistEditionBurner', function (accounts) {
   const edition2Price = etherToWei(0.2);
 
   beforeEach(async () => {
-    this.nrda = await NotRealDigitalAssetV2.new({from: _owner});
+    this.erc20 = await ERC20Mock.new('Token', 'MTKN', _owner, 0, {from:_owner});
+    const accts = [_owner, account2, artistAccount];
+
+    await Promise.all(accts.map(async acct => {
+      await this.erc20.mint(acct, etherToWei(9999), { from: _owner })
+    }))
+    this.nrda = await NotRealDigitalAssetV2.new(this.erc20.address, {from: _owner});
     addEditionCreators(this.nrda);
     this.burner = await ArtistEditionBurner.new(this.nrda.address, {from: _owner});
 
@@ -103,9 +110,10 @@ contract('ArtistEditionBurner', function (accounts) {
     beforeEach(async () => {
       await this.nrda.createActiveEdition(editionNumber2, editionData2, editionType, 0, 0, artistAccount, artistShare, edition2Price, editionTokenUri2, 3, {from: _owner});
 
+      await this.erc20.approve(this.nrda.address, etherToWei(9999), {from: account2})
       // Mint two tokens
-      await this.nrda.purchase(editionNumber2, {from: account2, value: edition2Price});
-      await this.nrda.purchase(editionNumber2, {from: account2, value: edition2Price});
+      await this.nrda.purchase(editionNumber2,  edition2Price, {from: account2});
+      await this.nrda.purchase(editionNumber2,  edition2Price, {from: account2});
     });
 
     it('editionActive', async () => {
@@ -188,10 +196,11 @@ contract('ArtistEditionBurner', function (accounts) {
     });
 
     it('fails if edition is sold out', async () => {
+      await this.erc20.approve(this.nrda.address, etherToWei(9999), {from: account2})
       // Sell out edition
-      await this.nrda.purchase(editionNumber2, {from: account2, value: edition2Price});
-      await this.nrda.purchase(editionNumber2, {from: account2, value: edition2Price});
-      await this.nrda.purchase(editionNumber2, {from: account2, value: edition2Price});
+      await this.nrda.purchase(editionNumber2,  edition2Price, {from: account2});
+      await this.nrda.purchase(editionNumber2,  edition2Price, {from: account2});
+      await this.nrda.purchase(editionNumber2,  edition2Price, {from: account2});
 
       await assertRevert(
         this.burner.deactivateOrReduceEditionSupply(editionNumber2, {from: artistAccount}),

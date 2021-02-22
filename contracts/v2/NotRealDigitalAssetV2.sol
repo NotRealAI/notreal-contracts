@@ -11,6 +11,7 @@ import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721Burnable.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721Pausable.sol";
 
+// ERC20
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 
@@ -22,7 +23,7 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "./StringsUtil.sol";
 import "../forwarder/NativeMetaTransaction.sol";
 
-import "hardhat/console.sol";
+// import "hardhat/console.sol";
 
 /**
 * @title NotRealDigitalAsset - V2
@@ -54,6 +55,56 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
 
   bytes32 public constant ROLE_NOT_REAL = keccak256('ROLE_NOT_REAL');
   bytes32 public constant ROLE_MINTER = keccak256('ROLE_MINTER');
+
+  ///////////////
+  // Modifiers //
+  ///////////////
+
+  modifier onlyAvailableEdition(uint256 _editionNumber) {
+    _onlyAvailableEdition(_editionNumber);
+    _;
+  }
+
+  modifier onlyActiveEdition(uint256 _editionNumber) {
+    _onlyActiveEdition(_editionNumber);
+    _;
+  }
+
+  modifier onlyRealEdition(uint256 _editionNumber) {
+    _onlyRealEdition(_editionNumber);
+    _;
+  }
+
+  modifier onlyValidTokenId(uint256 _tokenId) {
+    _onlyValidTokenId(_tokenId);
+    _;
+  }
+
+  modifier onlyPurchaseDuringWindow(uint256 _editionNumber) {
+    _onlyPurchaseDuringWindow(_editionNumber);
+    _;
+  }
+
+  function _onlyAvailableEdition(uint256 _editionNumber) internal view {
+    require(editionNumberToEditionDetails[_editionNumber].totalSupply < editionNumberToEditionDetails[_editionNumber].totalAvailable);
+  }
+
+  function _onlyActiveEdition(uint256 _editionNumber) internal view {
+    require(editionNumberToEditionDetails[_editionNumber].active);
+  }
+
+  function _onlyRealEdition(uint256 _editionNumber) internal view {
+    require(editionNumberToEditionDetails[_editionNumber].editionNumber > 0);
+  }
+
+  function _onlyValidTokenId(uint256 _tokenId) internal view {
+    require(_exists(_tokenId));
+  }
+
+  function _onlyPurchaseDuringWindow(uint256 _editionNumber) internal view {
+    require(editionNumberToEditionDetails[_editionNumber].startDate <= block.timestamp);
+    require(editionNumberToEditionDetails[_editionNumber].endDate >= block.timestamp);
+  }
 
   modifier onlyIfNotReal() {
     _onlyIfNotReal();
@@ -143,6 +194,7 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
   // the NR account which can receive commission
   address public nrCommissionAccount;
 
+  // Accepted ERC20 token
   IERC20 public acceptedToken;
 
   // Optional commission split can be defined per edition
@@ -191,41 +243,11 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
   mapping(uint256 => uint256[]) internal editionTypeToEditionNumber;
   mapping(uint256 => uint256) internal editionNumberToTypeIndex;
 
-  ///////////////
-  // Modifiers //
-  ///////////////
 
-  modifier onlyAvailableEdition(uint256 _editionNumber) {
-    require(editionNumberToEditionDetails[_editionNumber].totalSupply < editionNumberToEditionDetails[_editionNumber].totalAvailable);
-    _;
-  }
-
-  modifier onlyActiveEdition(uint256 _editionNumber) {
-    require(editionNumberToEditionDetails[_editionNumber].active);
-    _;
-  }
-
-  modifier onlyRealEdition(uint256 _editionNumber) {
-    require(editionNumberToEditionDetails[_editionNumber].editionNumber > 0);
-    _;
-  }
-
-  modifier onlyValidTokenId(uint256 _tokenId) {
-    require(_exists(_tokenId));
-    _;
-  }
-
-  modifier onlyPurchaseDuringWindow(uint256 _editionNumber) {
-    require(editionNumberToEditionDetails[_editionNumber].startDate <= block.timestamp);
-    require(editionNumberToEditionDetails[_editionNumber].endDate >= block.timestamp);
-    _;
-  }
 
   /*
    * Constructor
    */
-
-
   constructor (IERC20 _acceptedToken) public payable ERC721("NotRealDigitalAsset", "NRDA") {
     // set commission account to contract creator
     nrCommissionAccount = _msgSender();
@@ -261,107 +283,6 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
     // Create the token
     return _tokenId;
   }
-
-
-  ///**
-  // * @dev Creates an active edition from the given configuration
-  // * @dev Only callable from NR staff/addresses
-  // */
-  //function createActiveEdition(
-  //  uint256 _editionNumber,
-  //  bytes32 _editionData,
-  //  uint256 _editionType,
-  //  uint256 _startDate,
-  //  uint256 _endDate,
-  //  address _artistAccount,
-  //  uint256 _artistCommission,
-  //  uint256 _priceInWei,
-  //  string memory _tokenURI,
-  //  uint256 _totalAvailable
-  //)
-  //public
-  //onlyIfNotReal
-  //returns (bool)
-  //{
-  //  return _createEdition(_editionNumber, _editionData, _editionType, _startDate, _endDate, _artistAccount, _artistCommission, _priceInWei, _tokenURI, _totalAvailable, true);
-  //}
-
-  ///**
-  // * @dev Creates an inactive edition from the given configuration
-  // * @dev Only callable from NR staff/addresses
-  // */
-  //function createInactiveEdition(
-  //  uint256 _editionNumber,
-  //  bytes32 _editionData,
-  //  uint256 _editionType,
-  //  uint256 _startDate,
-  //  uint256 _endDate,
-  //  address _artistAccount,
-  //  uint256 _artistCommission,
-  //  uint256 _priceInWei,
-  //  string memory _tokenURI,
-  //  uint256 _totalAvailable
-  //)
-  //public
-  //onlyIfNotReal
-  //returns (bool)
-  //{
-  //  return _createEdition(_editionNumber, _editionData, _editionType, _startDate, _endDate, _artistAccount, _artistCommission, _priceInWei, _tokenURI, _totalAvailable, false);
-  //}
-
-  ///**
-  // * @dev Creates an active edition from the given configuration
-  // * @dev The concept of pre0minted editions means we can 'undermint' token IDS, good for holding back editions from public sale
-  // * @dev Only callable from NR staff/addresses
-  // */
-  //function createActivePreMintedEdition(
-  //  uint256 _editionNumber,
-  //  bytes32 _editionData,
-  //  uint256 _editionType,
-  //  uint256 _startDate,
-  //  uint256 _endDate,
-  //  address _artistAccount,
-  //  uint256 _artistCommission,
-  //  uint256 _priceInWei,
-  //  string memory _tokenURI,
-  //  uint256 _totalSupply,
-  //  uint256 _totalAvailable
-  //)
-  //public
-  //onlyIfNotReal
-  //returns (bool)
-  //{
-  //  _createEdition(_editionNumber, _editionData, _editionType, _startDate, _endDate, _artistAccount, _artistCommission, _priceInWei, _tokenURI, _totalAvailable, true);
-  //  updateTotalSupply(_editionNumber, _totalSupply);
-  //  return true;
-  //}
-
-  ///**
-  // * @dev Creates an inactive edition from the given configuration
-  // * @dev The concept of pre0minted editions means we can 'undermint' token IDS, good for holding back editions from public sale
-  // * @dev Only callable from NR staff/addresses
-  // */
-  //function createInactivePreMintedEdition(
-  //  uint256 _editionNumber,
-  //  bytes32 _editionData,
-  //  uint256 _editionType,
-  //  uint256 _startDate,
-  //  uint256 _endDate,
-  //  address _artistAccount,
-  //  uint256 _artistCommission,
-  //  uint256 _priceInWei,
-  //  string memory _tokenURI,
-  //  uint256 _totalSupply,
-  //  uint256 _totalAvailable
-  //)
-  //public
-  //onlyIfNotReal
-  //returns (bool)
-  //{
-  //  _createEdition(_editionNumber, _editionData, _editionType, _startDate, _endDate, _artistAccount, _artistCommission, _priceInWei, _tokenURI, _totalAvailable, false);
-  //  updateTotalSupply(_editionNumber, _totalSupply);
-  //  return true;
-  //}
 
   /**
    * @dev Internal factory method for building editions
@@ -489,53 +410,23 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
     EditionDetails storage _editionDetails = editionNumberToEditionDetails[_editionNumber];
     require(_msgValue >= _editionDetails.priceInWei);
     
-    console.log(_msgSender());
     // Transfer token to this contract
     acceptedToken.safeTransferFrom(_msgSender(), address(this), _msgValue);
-    console.log('here');
 
     // Construct next token ID e.g. 100000 + 1 = ID of 100001 (this first in the edition set)
     uint256 _tokenId = _nextTokenId(_editionNumber);
 
     // Create the token
     _mintToken(_to, _tokenId, _editionNumber, _editionDetails.tokenURI);
-    console.log('here2');
 
     // Splice funds and handle commissions
     _handleFunds(_editionNumber, _editionDetails.priceInWei, _editionDetails.artistAccount, _editionDetails.artistCommission, _msgValue);
-    console.log('here3');
 
     // Broadcast purchase
     emit Purchase(_tokenId, _editionNumber, _to, _msgValue);
 
     return _tokenId;
   }
-
-
-  /**
-   * @dev Private (NR only) method for under minting editions
-   * @dev Under minting allows for token IDs to be back filled if total supply is not set to zero by default
-   * @dev Payment not needed for this method
-   */
-  //function underMint(address _to, uint256 _editionNumber)
-  //public
-  //onlyIfUnderMinter
-  //onlyRealEdition(_editionNumber)
-  //returns (uint256) {
-  //  // Under mint token, meaning it takes one from the already sold version
-  //  uint256 _tokenId = _underMintNextTokenId(_editionNumber);
-
-  //  // If the next tokenId generate is more than the available number, abort as we have reached maximum under mint
-  //  if (_tokenId > _editionNumber.add(editionNumberToEditionDetails[_editionNumber].totalAvailable)) {
-  //    revert("Reached max tokenId, cannot under mint anymore");
-  //  }
-
-  //  // Create the token
-  //  _mintToken(_to, _tokenId, _editionNumber, editionNumberToEditionDetails[_editionNumber].tokenURI);
-
-  //  // Create the token
-  //  return _tokenId;
-  //}
 
   function _nextTokenId(uint256 _editionNumber) internal returns (uint256) {
     EditionDetails storage _editionDetails = editionNumberToEditionDetails[_editionNumber];
@@ -546,25 +437,6 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
     // Construct next token ID e.g. 100000 + 1 = ID of 100001 (this first in the edition set)
     return _editionDetails.editionNumber.add(_editionDetails.totalSupply);
   }
-
-  //function _underMintNextTokenId(uint256 _editionNumber) internal returns (uint256) {
-  //  EditionDetails storage _editionDetails = editionNumberToEditionDetails[_editionNumber];
-
-  //  // For old editions start the counter as edition + 1
-  //  uint256 _tokenId = _editionDetails.editionNumber.add(1);
-
-  //  // Work your way up until you find a free token based on the new _tokenIdd
-  //  while (_exists(_tokenId)) {
-  //    _tokenId = _tokenId.add(1);
-  //  }
-
-  //  // Bump number totalSupply if we are now over minting new tokens
-  //  if (_tokenId > _editionDetails.editionNumber.add(_editionDetails.totalSupply)) {
-  //    _editionDetails.totalSupply = _editionDetails.totalSupply.add(1);
-  //  }
-
-  //  return _tokenId;
-  //}
 
   function _mintToken(address _to, uint256 _tokenId, uint256 _editionNumber, string memory _tokenURI) internal {
 

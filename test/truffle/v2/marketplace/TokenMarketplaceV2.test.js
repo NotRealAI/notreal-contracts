@@ -1,6 +1,7 @@
 const getGasCosts = require('../../../helpers/getGasCosts');
 const addEditionCreators = require('../../../helpers/nrda');
-const getBalance = require('../../../helpers/getBalance');
+const getTokenBalance = require('../../../helpers/getTokenBalance');
+let getBalance;
 const toBN = require('../../../helpers/toBN');
 const assertRevert = require('../../../helpers/assertRevert');
 const etherToWei = require('../../../helpers/etherToWei');
@@ -11,6 +12,7 @@ const _ = require('lodash');
 
 const NotRealDigitalAssetV2 = artifacts.require('NotRealDigitalAssetV2');
 const TokenMarketplaceV2 = artifacts.require('TokenMarketplaceV2');
+const ERC20Mock = artifacts.require('ERC20Mock');
 
 require('chai')
   .use(require('chai-as-promised'))
@@ -67,9 +69,19 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
   beforeEach(async () => {
     // Create contracts
-    this.nrda = await NotRealDigitalAssetV2.new({from: _owner});
+    this.erc20 = await ERC20Mock.new('Token', 'MTKN', _owner, 0, {from:_owner});
+    getBalance = getTokenBalance(this.erc20);
+
+
+    this.nrda = await NotRealDigitalAssetV2.new(this.erc20.address, {from: _owner});
     addEditionCreators(this.nrda);
-    this.marketplace = await TokenMarketplaceV2.new(this.nrda.address, _owner, {from: _owner});
+    this.marketplace = await TokenMarketplaceV2.new(this.nrda.address, _owner, this.erc20.address, {from: _owner});
+
+
+    await Promise.all(accounts.slice(0,10).map(async acct => {
+      await this.erc20.mint(acct, etherToWei(9999), { from: _owner })
+      await this.erc20.approve(this.marketplace.address, etherToWei(9999), {from: acct});
+    }))
 
     // Update the commission account to be something different than owner
     await this.marketplace.setNrCommissionAccount(nrCommission, {from: _owner});
@@ -155,7 +167,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
     it('fails for invalid token ID', async () => {
       await assertRevert(
-        this.marketplace.placeBid(9999, {from: bidder1, value: this.minBidAmount}),
+        this.marketplace.placeBid(9999,  this.minBidAmount, {from: bidder1}),
         'Token does not exist'
       );
     });
@@ -163,13 +175,13 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
     it('fails if contract paused', async () => {
       await this.marketplace.pause({from: _owner});
       await assertRevert(
-        this.marketplace.placeBid(9999, {from: bidder1, value: this.minBidAmount})
+        this.marketplace.placeBid(9999,  this.minBidAmount, {from: bidder1})
       );
     });
 
     it('fails if less than minimum bid amount', async () => {
       await assertRevert(
-        this.marketplace.placeBid(_1_token1, {from: bidder1, value: etherToWei(0.01)}),
+        this.marketplace.placeBid(_1_token1,  etherToWei(0.01), {from: bidder1}),
         "Offer not enough"
       );
     });
@@ -177,7 +189,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
     it('fails if token is disabled from offers', async () => {
       await this.marketplace.disableAuction(_1_token1, {from: _owner});
       await assertRevert(
-        this.marketplace.placeBid(_1_token1, {from: bidder1, value: this.minBidAmount}),
+        this.marketplace.placeBid(_1_token1,  this.minBidAmount, {from: bidder1}),
         "Token not enabled for offers"
       );
     });
@@ -186,7 +198,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
       // Auction is 24 hours, fast-forward past end date
       await increaseTo(this.startDate + duration.days(5));
       await assertRevert(
-        this.marketplace.placeBid(_3_token1, {from: bidder1, value: this.minBidAmount}),
+        this.marketplace.placeBid(_3_token1,  this.minBidAmount, {from: bidder1}),
         "Token owned by artist outside of minting window"
       );
     });
@@ -214,7 +226,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
           beforeEach(async () => {
             this.newBidAmount = this.minBidAmount.mul(toBN(2));
             this.bidder1Balance = await getBalance(bidder1);
-            await this.marketplace.placeBid(token, {from: bidder2, value: this.newBidAmount});
+            await this.marketplace.placeBid(token,  this.newBidAmount, {from: bidder2});
           });
 
           it('the original bidder is refunded', async () => {
@@ -335,13 +347,14 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
       const setup = () => {
         beforeEach(async () => {
-          await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
+          await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
         })
       }
 
       const acceptBid = async () => {
         let tx = await this.marketplace.acceptBid(token, this.newBidAmount, {from: tokenOwner});
-        this.gas[tokenOwner] = await getGasCosts(tx);
+        // Turning off gas costs because we use ERC20 token now
+        //this.gas[tokenOwner] = await getGasCosts(tx);
         return tx
       }
 
@@ -355,13 +368,13 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
       const setup = () => {
         beforeEach(async () => {
           await increaseTo(this.startDate + duration.hours(2))
-          await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
+          await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
         })
       }
 
       const acceptBid = async () => {
         let tx = await this.marketplace.acceptBid(token, this.newBidAmount, {from: tokenOwner});
-        this.gas[tokenOwner] = await getGasCosts(tx);
+        //this.gas[tokenOwner] = await getGasCosts(tx);
         return tx
       }
 
@@ -375,14 +388,14 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
       const setup = () => {
         beforeEach(async () => {
           await increaseTo(this.startDate + duration.hours(2))
-          await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
+          await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
         })
       }
 
       const acceptBid = async () => {
         await increaseTo(this.startDate + duration.hours(48))
         let tx = await this.marketplace.acceptBid(token, this.newBidAmount, {from: bidder2});
-        this.gas[bidder2] = await getGasCosts(tx);
+        //this.gas[bidder2] = await getGasCosts(tx);
         return tx
       }
 
@@ -400,14 +413,14 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
       const setup = () => {
         beforeEach(async () => {
           await increaseTo(this.startDate + duration.hours(2))
-          await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
+          await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
         })
       }
 
       const acceptBid = async () => {
         await increaseTo(this.startDate + duration.hours(48))
         let tx = await this.marketplace.acceptBid(token, this.newBidAmount, {from: bidder3});
-        this.gas[bidder3] = await getGasCosts(tx);
+        //this.gas[bidder3] = await getGasCosts(tx);
         return tx
       }
 
@@ -430,7 +443,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
         // Setup
         await this.nrda.setApprovalForAll(this.marketplace.address, true, {from: bidder1});
         tx = await this.nrda.setApprovalForAll(this.marketplace.address, true, {from: bidder2});
-        this.gas[bidder1].iadd(await getGasCosts(tx));
+        //this.gas[bidder1].iadd(await getGasCosts(tx));
 
         curBalance[bidder1] = (this.preBalance[bidder1]).sub(this.gas[bidder1]);
         (await getBalance(bidder1)).should.be.eq.BN(curBalance[bidder1]);
@@ -438,8 +451,8 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
         // Place Bid
         await increaseTo(this.startDate + duration.hours(2))
-        tx = await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
-        this.gas[bidder1].iadd(await getGasCosts(tx));
+        tx = await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
+        //this.gas[bidder1].iadd(await getGasCosts(tx));
 
         curBalance[bidder1] = (this.preBalance[bidder1]).sub(this.gas[bidder1]).sub(this.minBidAmount);
         (await getBalance(bidder1)).should.be.eq.BN(curBalance[bidder1]);
@@ -448,16 +461,16 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
         // Minter (bidder1) accepts bid
         await increaseTo(this.startDate + duration.hours(48))
         tx = await this.marketplace.acceptBid(token, this.minBidAmount, {from: bidder1});
-        this.gas[bidder1].iadd(await getGasCosts(tx));
+        //this.gas[bidder1].iadd(await getGasCosts(tx));
 
         curBalance[bidder1] = (this.preBalance[bidder1]).sub(this.gas[bidder1]).sub(this.minBidAmount);
         (await getBalance(bidder1)).should.be.eq.BN(curBalance[bidder1]);
 
 
         // Minter sells their token
-        await this.marketplace.placeBid(token, {from: bidder2, value: this.minBidAmount});
+        await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder2});
         tx = await this.marketplace.acceptBid(token, this.minBidAmount, {from: bidder1});
-        this.gas[bidder1].iadd(await getGasCosts(tx));
+        //this.gas[bidder1].iadd(await getGasCosts(tx));
 
         // 100 - artistShare - nrShare = 92
         let ownerAmount = this.minBidAmount.div(toBN(100)).mul(toBN(92)); // 92%
@@ -469,7 +482,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
   
 
         // 3rd party sells token, minter gets a royalty
-        await this.marketplace.placeBid(token, {from: bidder3, value: this.minBidAmount});
+        await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder3});
         await this.marketplace.acceptBid(token, this.minBidAmount, {from: bidder2});
 
         let minterRoyaltyAmount = this.minBidAmount.div(toBN(100)).mul(toBN(2)); // 92%
@@ -502,7 +515,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
       const tokenOwner = owner1;
 
       beforeEach(async () => {
-        await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
+        await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
       })
 
       it('allows bid acceptance from token owner', async () => {
@@ -532,7 +545,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
       beforeEach(async () => {
         await increaseTo(this.startDate + duration.hours(2))
-        await this.marketplace.placeBid(token, {from: bidder1, value: this.minBidAmount});
+        await this.marketplace.placeBid(token,  this.minBidAmount, {from: bidder1});
         await increaseTo(this.startDate + duration.hours(6))
       })
 
@@ -564,7 +577,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
     beforeEach(async () => {
       this.minBidAmount = etherToWei(1);
-      await this.marketplace.placeBid(_2_token1, {from: bidder1, value: this.minBidAmount});
+      await this.marketplace.placeBid(_2_token1,  this.minBidAmount, {from: bidder1});
     });
 
     it('offer is placed', async () => {
@@ -593,7 +606,8 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
         this.optionalArtistAccountBalance = await getBalance(optionalArtistAccount);
 
         let tx = await this.marketplace.acceptBid(_2_token1, this.minBidAmount, {from: owner1});
-        this.txGasCosts = await getGasCosts(tx);
+        //this.txGasCosts = await getGasCosts(tx);
+        this.txGasCosts = toBN(0);
 
         this.bidder1PostBalance = await getBalance(bidder1);
         this.owner1PostBalance = await getBalance(owner1);
@@ -664,7 +678,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
   //   beforeEach(async () => {
   //     this.bidder1Balance = await getBalance(bidder1);
-  //     let tx = await this.marketplace.placeBid(_1_token1, {from: bidder1, value: this.minBidAmount});
+  //     let tx = await this.marketplace.placeBid(_1_token1,  this.minBidAmount, {from: bidder1});
   //     this.placeBidGasCosts = await getGasCosts(tx);
   //   });
 
@@ -726,8 +740,9 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
     beforeEach(async () => {
       this.bidder1Balance = await getBalance(bidder1);
-      let tx = await this.marketplace.placeBid(_1_token1, {from: bidder1, value: this.minBidAmount});
-      this.placeBidGasCosts = await getGasCosts(tx);
+      let tx = await this.marketplace.placeBid(_1_token1,  this.minBidAmount, {from: bidder1});
+      //this.placeBidGasCosts = await getGasCosts(tx);
+      this.placeBidGasCosts = toBN(0)
     });
 
     it('fails for invalid token ID', async () => {
@@ -793,7 +808,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
   describe('Accepting a bid', async () => {
 
     beforeEach(async () => {
-      let tx = await this.marketplace.placeBid(_1_token2, {from: bidder1, value: this.minBidAmount});
+      let tx = await this.marketplace.placeBid(_1_token2,  this.minBidAmount, {from: bidder1});
       this.placeBidGasCosts = await getGasCosts(tx);
     });
 
@@ -840,7 +855,8 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
         this.optionalArtistAccountBalance = await getBalance(optionalArtistAccount);
 
         let tx = await this.marketplace.acceptBid(_1_token2, this.minBidAmount, {from: owner2});
-        this.txGasCosts = await getGasCosts(tx);
+        this.txGasCosts = toBN(0);
+        //this.txGasCosts = await getGasCosts(tx);
 
         this.bidder1PostBalance = await getBalance(bidder1);
         this.owner2PostBalance = await getBalance(owner2);
@@ -907,7 +923,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
   describe('should determineSaleValues() correctly', async () => {
 
     beforeEach(async () => {
-      await this.marketplace.placeBid(_1_token2, {from: bidder1, value: this.minBidAmount});
+      await this.marketplace.placeBid(_1_token2,  this.minBidAmount, {from: bidder1});
     });
 
   });
@@ -976,7 +992,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
       it('fails when not listed', async () => {
         await assertRevert(
-          this.marketplace.buyToken(_1_token1, {from: owner2, value: this.minBidAmount}),
+          this.marketplace.buyToken(_1_token1,  this.minBidAmount, {from: owner2}),
           "No listing found"
         );
       });
@@ -990,7 +1006,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
         //attempt to buy it
         await assertRevert(
-          this.marketplace.buyToken(_1_token1, {from: owner2, value: this.minBidAmount}),
+          this.marketplace.buyToken(_1_token1,  this.minBidAmount, {from: owner2}),
           "Listing not valid, token owner has changed"
         );
       });
@@ -999,7 +1015,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
         await this.marketplace.listToken(_1_token1, this.minBidAmount, {from: owner1});
 
         await assertRevert(
-          this.marketplace.buyToken(_1_token1, {from: owner2, value: "0"}),
+          this.marketplace.buyToken(_1_token1,  "0", {from: owner2}),
           "List price not satisfied"
         );
       });
@@ -1017,7 +1033,7 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
 
           (await this.nrda.ownerOf(_1_token1)).should.be.equal(owner1);
 
-          await this.marketplace.buyToken(_1_token1, {from: owner2, value: this.minBidAmount});
+          await this.marketplace.buyToken(_1_token1,  this.minBidAmount, {from: owner2});
 
           (await this.nrda.ownerOf(_1_token1)).should.be.equal(owner2);
         });
@@ -1037,8 +1053,9 @@ contract('TokenMarketplaceV2 tests', function (accounts) {
             this.optionalArtistAccountBalance = await getBalance(optionalArtistAccount);
 
             // buy it
-            let tx = await this.marketplace.buyToken(_1_token1, {from: owner2, value: this.minBidAmount});
-            this.txGasCosts = await getGasCosts(tx);
+            let tx = await this.marketplace.buyToken(_1_token1,  this.minBidAmount, {from: owner2});
+            this.txGasCosts = toBN(0)
+            //this.txGasCosts = await getGasCosts(tx);
 
             this.owner1PostBalance = await getBalance(owner1);
             this.owner2PostBalance = await getBalance(owner2);

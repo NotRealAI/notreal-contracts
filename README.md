@@ -5,7 +5,7 @@
 
 <h1 align="center">NotReal Smart Contracts</h1>
 <div align="center">
-  Discover, buy and collect rare digital artwork
+  Discover, buy and collect AI-generated art
 </div>
 
 <br />
@@ -14,8 +14,6 @@
   <a href="https://www.ethereum.org/" target="_blank"><img src="https://img.shields.io/badge/platform-Ethereum-brightgreen.svg?style=flat-square" alt="Ethereum" /></a>
   <a href="http://erc721.org/" target="_blank"><img src="https://img.shields.io/badge/token-ERC721-ff69b4.svg?style=flat-square" alt="Token ERC721" /> </a>
   <img src="https://img.shields.io/badge/contributions-welcome-orange.svg?style=flat-square" alt="Contributions Welcome" />
-  <img src="https://travis-ci.com/notreal/not-real-contracts.svg?branch=master" alt="MIT License" />
-  <a href="https://travis-ci.org/notreal/not-real-web3-marketplace" target="_blank"<img src="https://travis-ci.org/notreal/not-real-web3-marketplace.svg?branch=master" /><a/>
 </div>
 
 

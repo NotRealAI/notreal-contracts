@@ -1,7 +1,5 @@
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.6.12;
-
-// allows for multi-address access controls to different functions
-//import "../access/AccessControlled.sol";
 
 import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -23,7 +21,7 @@ import "@openzeppelin/contracts/math/SafeMath.sol";
 import "./StringsUtil.sol";
 import "../forwarder/NativeMetaTransaction.sol";
 
-// import "hardhat/console.sol";
+//import "hardhat/console.sol";
 
 /**
 * @title NotRealDigitalAsset - V2
@@ -55,6 +53,7 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
 
   bytes32 public constant ROLE_NOT_REAL = keccak256('ROLE_NOT_REAL');
   bytes32 public constant ROLE_MINTER = keccak256('ROLE_MINTER');
+  bytes32 public constant ROLE_MARKET = keccak256('ROLE_MARKET');
 
   ///////////////
   // Modifiers //
@@ -441,7 +440,7 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
   function _mintToken(address _to, uint256 _tokenId, uint256 _editionNumber, string memory _tokenURI) internal {
 
     // Mint new base token
-    super._mint(_to, _tokenId);
+    super._safeMint(_to, _tokenId);
     super._setTokenURI(_tokenId, _tokenURI);
 
     // Maintain mapping for tokenId to edition for lookup
@@ -522,15 +521,26 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
     }
   }
 
+  function batchBurn(uint256[] memory _tokenIds, bool _disableEdition) public onlyIfNotReal {
+    for (uint i = 0; i < _tokenIds.length; i++) {
+      if(_disableEdition) {
+        uint256 _editionNumber = tokenIdToEditionNumber[_tokenIds[i]];
+        updateActive(_editionNumber, false);
+        updateEditionType(_editionNumber, 4);
+      }
+      burn(_tokenIds[i]);
+    }
+  }
+
   /**
    * @dev An extension to the default ERC721 behaviour, derived from ERC-875.
    * @dev Allowing for batch transfers from the provided address, will fail if from does not own all the tokens
    */
-  function batchTransferFrom(address _from, address _to, uint256[] memory _tokenIds) public {
-    for (uint i = 0; i < _tokenIds.length; i++) {
-      transferFrom(_from, _to, _tokenIds[i]);
-    }
-  }
+  //function batchTransferFrom(address _from, address _to, uint256[] memory _tokenIds) public {
+  //  for (uint i = 0; i < _tokenIds.length; i++) {
+  //    transferFrom(_from, _to, _tokenIds[i]);
+  //  }
+  //}
 
   //////////////////
   // Base Updates //
@@ -600,7 +610,7 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
   }
 
   function updateEditionType(uint256 _editionNumber, uint256 _editionType)
-  external
+  public
   onlyIfNotReal
   onlyRealEdition(_editionNumber) {
 
@@ -623,7 +633,7 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
   }
 
   function updateActive(uint256 _editionNumber, bool _active)
-  external
+  public 
   onlyIfNotReal
   onlyRealEdition(_editionNumber) {
     editionNumberToEditionDetails[_editionNumber].active = _active;
@@ -659,8 +669,8 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
 
   function updateEndDate(uint256 _editionNumber, uint256 _endDate)
   external
-  onlyIfNotReal
   onlyRealEdition(_editionNumber) {
+    require(_msgSender() == owner() || hasRole(ROLE_NOT_REAL, _msgSender()) || hasRole(ROLE_MARKET, _msgSender()));
     editionNumberToEditionDetails[_editionNumber].endDate = _endDate;
   }
 
@@ -750,7 +760,6 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
       return false;
     }
     EditionDetails storage editionNumber = editionNumberToEditionDetails[_editionNumber];
-    //console.log(editionNumber.editionNumber, _editionNumber);
     return editionNumber.editionNumber == _editionNumber;
   }
 
@@ -831,23 +840,15 @@ NativeMetaTransaction("NotRealDigitalAssetV2")
     );
   }
 
-  // function tokenURI(uint256 _tokenId) public override view onlyValidTokenId(_tokenId) returns (string memory) {
-  //   return StringsUtil.strConcat(tokenBaseURI, super.tokenURI(_tokenId));
-  // }
-
-  // function tokenURISafe(uint256 _tokenId) public override view returns (string memory) {
-  //   return StringsUtil.strConcat(tokenBaseURI, super.tokenURISafe(_tokenId));
-  // }
-
   function purchaseDatesToken(uint256 _tokenId) public view returns (uint256 _startDate, uint256 _endDate) {
     uint256 _editionNumber = tokenIdToEditionNumber[_tokenId];
     return purchaseDatesEdition(_editionNumber);
   }
 
-  function priceInWeiToken(uint256 _tokenId) public view returns (uint256 _priceInWei) {
-    uint256 _editionNumber = tokenIdToEditionNumber[_tokenId];
-    return priceInWeiEdition(_editionNumber);
-  }
+  //function priceInWeiToken(uint256 _tokenId) public view returns (uint256 _priceInWei) {
+  //  uint256 _editionNumber = tokenIdToEditionNumber[_tokenId];
+  //  return priceInWeiEdition(_editionNumber);
+  //}
 
 
 

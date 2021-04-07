@@ -1,5 +1,5 @@
 pragma solidity ^0.6.12;
-
+// SPDX-License-Identifier: BUSL-1.1
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "../../access/Whitelist.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
@@ -21,6 +21,10 @@ interface INRDAV2Methods {
 
   function purchaseDatesEnded(uint256 _editionNumber) external view returns (bool _ended);
 
+  function purchaseDatesEdition(uint256 _editionNumber) external view returns (uint256 _startDate, uint256 _endDate);
+
+  function updateEndDate(uint256 _editionNumber, uint256 _endDate) external;
+
   function editionOfTokenId(uint256 _tokenId) external view returns (uint256 tokenId);
 
   function artistCommission(uint256 _editionNumber) external view returns (address _artistAccount, uint256 _artistCommission);
@@ -28,6 +32,7 @@ interface INRDAV2Methods {
   function editionOptionalCommission(uint256 _tokenId) external view returns (uint256 _rate, address _recipient);
 
   function safeTransferFrom(address _from, address _to, uint256 _tokenId) external;
+
 }
 
 // Based on ITokenMarketplace.sol
@@ -54,6 +59,9 @@ NativeMetaTransaction("TokenMarketplaceV2")
   event UpdateRoyaltyPercentageFee(uint256 _oldPercentage, uint256 _newPercentage);
   event UpdateMinterRoyaltyPercentageFee(uint256 _oldPercentage, uint256 _newPercentage);
   event UpdateMinBidAmount(uint256 minBidAmount);
+  event UpdateOvertime(uint256 overtime, uint256 overtimeIncr);
+  event UpdateCharityRoyaltyPercentage(uint256 _oldPercentage, uint256 _newPercentage);
+  event UpdateCharityMintPercentage(uint256 _oldPercentage, uint256 _newPercentage);
 
   event TokenListed(
     uint256 indexed _tokenId,
@@ -70,6 +78,12 @@ NativeMetaTransaction("TokenMarketplaceV2")
     address indexed _buyer,
     address indexed _seller,
     uint256 _price
+  );
+
+  event TokenGiven(
+    uint256 indexed _tokenId,
+    address indexed _buyer,
+    address indexed _seller
   );
 
   event BidPlaced(
@@ -135,13 +149,23 @@ NativeMetaTransaction("TokenMarketplaceV2")
   // NR account which can receive commission
   address public nrCommissionAccount;
 
+
   // Accepted ERC20 token
   IERC20 public acceptedToken;
 
   // These are in 1/1000ths
-  uint256 public artistRoyaltyPercentage = 100;
-  uint256 public platformFeePercentage = 25;
+  uint256 public artistRoyaltyPercentage = 1;
+  uint256 public platformFeePercentage   = 0;
   uint256 public minterRoyaltyPercentage = 20;
+
+
+  // charity account
+  address public charityAccount;
+  uint256 public charityMintPercentage = 0;
+  uint256 public charityRoyaltyPercentage = 0;
+
+  uint256 public overtime = 300; // seconds
+  uint256 public overtimeIncr = 5; // pct
 
 
   // Token ID to Offer mapping
@@ -200,6 +224,10 @@ NativeMetaTransaction("TokenMarketplaceV2")
   constructor(INRDAV2Methods _nrdaAddress, address _nrCommissionAccount, IERC20 _acceptedToken) public {
     nrdaAddress = _nrdaAddress;
     nrCommissionAccount = _nrCommissionAccount;
+    // Nr commission account not used at the moment, 
+    // but charity account is for future proofing and also differentiating 
+    // mint purchase percent from royalty percent
+    charityAccount = _nrCommissionAccount;
     acceptedToken = _acceptedToken;
     _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
     super.addAddressToWhitelist(_msgSender());
@@ -214,10 +242,13 @@ NativeMetaTransaction("TokenMarketplaceV2")
   whenNotPaused
   nonReentrant
   onlyWhenTokenExists(_tokenId)
-  onlyWhenBidOverMinAmount(_tokenId, _msgValue)
   onlyWhenTokenAuctionEnabled(_tokenId)
   onlyDuringMintWindow(_tokenId)
   {
+
+    require(_msgValue >= offers[_tokenId].offer.add(minBidAmount), "Offer not enough");
+
+    overtimeBid(_tokenId, _msgValue);
 
     // require(!isContract(_msgSender()), "Unable to place a bid as a contract");
     acceptedToken.safeTransferFrom(_msgSender(), address(this), _msgValue);
@@ -229,6 +260,18 @@ NativeMetaTransaction("TokenMarketplaceV2")
 
     emit BidPlaced(_tokenId, currentOwner, _msgSender(), _msgValue);
   }
+
+  function overtimeBid(uint256 _tokenId, uint256 _msgValue)
+  internal
+  {
+    uint256 editionNumber = nrdaAddress.editionOfTokenId(_tokenId);
+    (uint256 startDate, uint256 endDate) = nrdaAddress.purchaseDatesEdition(editionNumber);
+    if(endDate > block.timestamp && endDate.sub(block.timestamp) < overtime) {
+      require(_msgValue >= offers[_tokenId].offer.div(100).mul(100 + overtimeIncr), "Overtime offer % threshold not met");
+      nrdaAddress.updateEndDate(editionNumber, endDate + overtime.sub(endDate.sub(block.timestamp)));
+    }
+  }
+
 
   //// Allowing withdraw could create an exploit
   //function withdrawBid(uint256 _tokenId)
@@ -287,7 +330,7 @@ NativeMetaTransaction("TokenMarketplaceV2")
 
     delete offers[_tokenId];
 
-    _handleFunds(editionNumber, winningOffer, currentOwner);
+    _handleFunds(editionNumber, winningOffer, currentOwner, mintPurchase);
 
     nrdaAddress.safeTransferFrom(currentOwner, winningBidder, _tokenId);
 
@@ -345,6 +388,28 @@ NativeMetaTransaction("TokenMarketplaceV2")
     emit TokenListed(_tokenId, _msgSender(), _listingPrice);
   }
 
+
+  function giveToken(uint256 _tokenId, address _to)
+  public
+  whenNotPaused {
+    require(!disabledListings[_tokenId], "Listing disabled");
+
+    address tokenOwner = nrdaAddress.ownerOf(_tokenId);
+    require(tokenOwner == _msgSender(), "Not token owner");
+
+    uint256 editionNumber = nrdaAddress.editionOfTokenId(_tokenId);
+    (address artistAccount, uint256 artistCommissionRate) = nrdaAddress.artistCommission(editionNumber);
+    bool artistIsOwner = nrdaAddress.ownerOf(_tokenId) == artistAccount;
+    require(artistIsOwner, "Not artist owner");
+
+    require(_to != address(0), "Invalid address");
+    minters[editionNumber] = _to;
+
+    nrdaAddress.safeTransferFrom(_msgSender(), _to, _tokenId);
+
+    emit TokenGiven(_tokenId, _to, _msgSender());
+  }
+
   function delistToken(uint256 _tokenId)
   public
   whenNotPaused {
@@ -384,7 +449,7 @@ NativeMetaTransaction("TokenMarketplaceV2")
     _refundHighestBidder(_tokenId);
 
     // split funds
-    _handleFunds(editionNumber, listingPrice, currentOwner);
+    _handleFunds(editionNumber, listingPrice, currentOwner, false);
 
     // transfer token to buyer
     nrdaAddress.safeTransferFrom(currentOwner, _msgSender(), _tokenId);
@@ -406,7 +471,7 @@ NativeMetaTransaction("TokenMarketplaceV2")
   // Funds handling //
   ////////////////////
 
-  function _handleFunds(uint256 _editionNumber, uint256 _offer, address _currentOwner) internal {
+  function _handleFunds(uint256 _editionNumber, uint256 _offer, address _currentOwner, bool _mintPurchase) internal {
 
     // Get existing artist commission
     (address artistAccount, uint256 artistCommissionRate) = nrdaAddress.artistCommission(_editionNumber);
@@ -420,7 +485,9 @@ NativeMetaTransaction("TokenMarketplaceV2")
       minter = _currentOwner;
     }
 
-    _splitFunds(artistAccount, artistCommissionRate, optionalCommissionRecipient, optionalCommissionRate, minter, _offer, _currentOwner);
+    uint256 charityFee = _mintPurchase ? charityMintPercentage : charityRoyaltyPercentage;
+
+    _splitFunds(artistAccount, artistCommissionRate, optionalCommissionRecipient, optionalCommissionRate, charityFee, minter, _offer, _currentOwner);
   }
 
   function _splitFunds(
@@ -428,20 +495,28 @@ NativeMetaTransaction("TokenMarketplaceV2")
     uint256 _artistCommissionRate,
     address _optionalCommissionRecipient,
     uint256 _optionalCommissionRate,
+    uint256 _charityFee,
     address _minterAccount,
     uint256 _offer,
     address _currentOwner
   ) internal {
 
+
+
     // Work out total % of royalties to payout = creator royalties + NR commission
-    uint256 totalCommissionPercentageToPay = platformFeePercentage.add(artistRoyaltyPercentage).add(minterRoyaltyPercentage);
+    uint256 totalCommissionPercentageToPay = platformFeePercentage.add(artistRoyaltyPercentage).add(minterRoyaltyPercentage).add(_charityFee);
 
     // Send current owner majority share of the offer
     uint256 totalToSendToOwner = _offer.sub(
       _offer.div(1000).mul(totalCommissionPercentageToPay)
     );
+
+
     acceptedToken.safeTransfer(_currentOwner, totalToSendToOwner);
     //payable(_currentOwner).transfer(totalToSendToOwner);
+
+    uint256 charityCommission = _offer.div(1000).mul(_charityFee);
+    acceptedToken.safeTransfer(charityAccount, charityCommission);
 
     // Send % to NR
     uint256 nrCommission = _offer.div(1000).mul(platformFeePercentage);
@@ -454,7 +529,7 @@ NativeMetaTransaction("TokenMarketplaceV2")
     //payable(_minterAccount).transfer(minterRoyalty);
 
     // Send to seller minus royalties and commission
-    uint256 remainingRoyalties = _offer.sub(nrCommission).sub(minterRoyalty).sub(totalToSendToOwner);
+    uint256 remainingRoyalties = _offer.sub(nrCommission).sub(minterRoyalty).sub(totalToSendToOwner).sub(charityCommission);
 
     if (_optionalCommissionRecipient == address(0)) {
       // After NR and Seller - send the rest to the original artist
@@ -463,6 +538,7 @@ NativeMetaTransaction("TokenMarketplaceV2")
     } else {
       _handleOptionalSplits(_artistAccount, _artistCommissionRate, _optionalCommissionRecipient, _optionalCommissionRate, remainingRoyalties);
     }
+
   }
 
   function _handleOptionalSplits(
@@ -594,6 +670,18 @@ NativeMetaTransaction("TokenMarketplaceV2")
     nrCommissionAccount = _nrCommissionAccount;
   }
 
+  function setCharityAccount(address _charityAccount) public onlyIfWhitelisted(_msgSender()) {
+    require(_charityAccount != address(0), "Invalid address");
+    charityAccount = _charityAccount;
+  }
+
+  function setCharityPercentage(uint256 _charityMintPercentage, uint256 _charityRoyaltyPercentage) public onlyIfWhitelisted(_msgSender()) {
+    emit UpdateCharityMintPercentage(charityMintPercentage, _charityMintPercentage);
+    emit UpdateCharityRoyaltyPercentage(charityRoyaltyPercentage, _charityRoyaltyPercentage);
+    charityMintPercentage = _charityMintPercentage;
+    charityRoyaltyPercentage = _charityRoyaltyPercentage;
+  }
+
   function setArtistRoyaltyPercentage(uint256 _artistRoyaltyPercentage) public onlyIfWhitelisted(_msgSender()) {
     emit UpdateRoyaltyPercentageFee(artistRoyaltyPercentage, _artistRoyaltyPercentage);
     artistRoyaltyPercentage = _artistRoyaltyPercentage;
@@ -614,12 +702,27 @@ NativeMetaTransaction("TokenMarketplaceV2")
     minters[_editionNumber] = _minterAccount;
   }
 
+  function setOvertime(uint256 _overtime) public onlyIfWhitelisted(_msgSender()) {
+    overtime = _overtime;
+    emit UpdateOvertime(overtime, overtimeIncr);
+  }
+
+  function setOvertimeIncr(uint256 _overtimeIncr) public onlyIfWhitelisted(_msgSender()) {
+    overtimeIncr = _overtimeIncr;
+    emit UpdateOvertime(overtime, overtimeIncr);
+  }
+
   function pause() public onlyOwner {
       _pause();
   }
 
   function unpause() public onlyOwner {
       _unpause();
+  }
+
+  function reclaimEther() external onlyOwner {
+    payable(owner()).transfer(address(this).balance);
+    acceptedToken.transfer(owner(), acceptedToken.balanceOf(address(this)));
   }
 
 }

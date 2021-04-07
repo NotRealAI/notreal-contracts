@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.6.12;
 
 import "../../access/Whitelist.sol";
@@ -611,34 +612,6 @@ NativeMetaTransaction("ArtistAcceptingBidsV2")
     acceptedToken.transfer(owner(), acceptedToken.balanceOf(address(this)));
   }
   
-  /**
-   * @dev Allows for the ability to extract ether so we can distribute to the correct bidders accordingly
-   * @dev Only callable from whitelist
-   */
-  //function withdrawStuckEther(address _withdrawalAccount)
-  //public {
-  //  require(_withdrawalAccount != address(0), "Invalid address provided");
-  //  require(acceptedToken.balanceOf(address(this)) != 0, "No more ether to withdraw");
-  //  //require(address(this).balance != 0, "No more ether to withdraw");
-  //  acceptedToken.transfer(_withdrawalAccount, acceptedToken.balanceOf(address(this)));
-  //  payable(_withdrawalAccount).transfer(address(this).balance);
-  //}
-
-  ///**
-  // * @dev Allows for the ability to extract specific ether amounts so we can distribute to the correct bidders accordingly
-  // * @dev Only callable from whitelist
-  // */
-  //function withdrawStuckEtherOfAmount(address _withdrawalAccount, uint256 _amount)
-  //onlyIfWhitelisted(_msgSender())
-  //public {
-  //  require(_withdrawalAccount != address(0), "Invalid address provided");
-  //  require(_amount != 0, "Invalid amount to withdraw");
-  //  require(acceptedToken.balanceOf(address(this)) >= _amount, "No more ether to withdraw");
-  //  //require(address(this).balance >= _amount, "No more ether to withdraw");
-  //  acceptedToken.transfer(_withdrawalAccount, acceptedToken.balanceOf(address(this)));
-  //  //payable(_withdrawalAccount).transfer(_amount);
-  //}
-
   /**
    * @dev Manual override method for setting edition highest bid & the highest bidder to the provided address
    * @dev Only callable from whitelist
